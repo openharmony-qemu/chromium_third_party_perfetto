@@ -74,7 +74,7 @@ config("libunwindstack_config") {
     perfetto_isystem_cflag,
     rebase_path("android-core/demangle/include", root_build_dir),
   ]
-  if (is_android) {
+  if (is_android || is_ohos) {
     cflags += [
       perfetto_isystem_cflag,
       rebase_path("bionic/libc/include", root_build_dir),
@@ -653,7 +653,7 @@ if (use_custom_libcxx) {
     ]
 
     # On linux this seems to introduce an unwanted glibc 2.18 dependency.
-    if (is_android) {
+    if (is_android || is_ohos) {
       sources += [ "libcxxabi/src/cxa_thread_atexit.cpp" ]
     }
     configs -= [
@@ -724,7 +724,7 @@ if (use_custom_libcxx) {
       "//gn/standalone/sanitizers:sanitizer_options_link_helper",
     ]
     defines = [ "_LIBCPP_BUILDING_LIBRARY" ]
-    if ((is_linux || is_android) && using_sanitizer &&
+    if ((is_linux || is_android || is_ohos) && using_sanitizer &&
         (is_asan || is_tsan || is_msan)) {
       # In {a,t,m}san configurations, operator new and operator delete will be
       # provided by the sanitizer runtime library.  Since libc++ defines these
@@ -797,7 +797,7 @@ source_set("benchmark") {
 }
 
 # On Linux/Android use libbacktrace in debug builds for better stacktraces.
-if (is_linux || is_android) {
+if (is_linux || is_android || is_ohos) {
   config("libbacktrace_config") {
     visibility = _buildtools_visibility
     include_dirs = [
@@ -1022,7 +1022,7 @@ source_set("libunwindstack") {
     "android-unwinding/libunwindstack/Symbols.cpp",
     "android-unwinding/libunwindstack/Unwinder.cpp",
   ]
-  if (!is_android) {
+  if (!is_android && !is_ohos) {
     sources += [
       "android-libbase/liblog_symbols.cpp",
       "android-libbase/logging.cpp",
