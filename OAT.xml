@@ -9,36 +9,76 @@
         <filefilterlist>
             <filefilter name="defaultPolicyFilter"
                 desc="Filters for compatibility,license header policies">
-                <filteritem type="filepath" name="third_party/llvm-10.0/llvm/include/llvm/Support/LICENSE.TXT"
-                    desc="" />
-                <filteritem type="filepath" name="third_party/SPIRV-Tools/BUILD.bazel"
-                    desc="" />
-                <filteritem type="filepath" name="third_party/llvm-subzero/LICENSE.TXT"
-                    desc="" />
-                <filteritem type="filepath" name="third_party/subzero/LICENSE.TXT"
-                    desc="" />
-                <filteritem type="filepath" name="third_party/subzero/bloat/README.chromium"
-                    desc="" />
-                <filteritem type="filepath" name="third_party/llvm-10.0/Android.bp"
-                    desc="" />
-                <filteritem type="filepath" name="third_party/SPIRV-Headers/BUILD.bazel"
-                    desc="" />
-                <filteritem type="filepath" name="README.OpenSource"
-                    desc="" />
-                <filteritem type="filepath" name=".*chromium"
-                    desc="" />
                 <filteritem type="filepath" name=".*bp"
                     desc="" />
                 <filteritem type="filepath" name="python/setup.py"
                     desc="" />
                 <filteritem type="filepath" name="METADATA"
                     desc="" />
+                <filteritem type="filepath" name=".*chromium"
+                    desc="" />
+                <filteritem type="filepath" name="README.OpenSource"
+                    desc="" />
             </filefilter>
             <filefilter name="defaultFilter">
                 <filteritem type="filepath" name="README.OpenSource"
                     desc="" />
+                <filteritem type="filepath" name=".*png"
+                    desc="" />
+                <filteritem type="filepath" name="src/ipc/buffered_frame_deserializer_fuzzer_corpus/two_valid_frames"
+                    desc="" />
+                <filteritem type="filepath" name="src/profiling/memory/shared_ring_buffer_fuzzer_corpus/empty"
+                    desc="" />
+                <filteritem type="filepath" name="src/profiling/memory/shared_ring_buffer_fuzzer_corpus/overflow"
+                    desc="" />
+                <filteritem type="filepath" name="python/perfetto/trace_processor/metrics.descriptor"
+                    desc="" />
+                <filteritem type="filepath" name="python/perfetto/trace_processor/trace_processor.descriptor"
+                    desc="" />
+                <filteritem type="filepath" name="src/traced/probes/ftrace/cpu_reader_fuzzer_corpus/one_page_sched_switch"
+                    desc="" />
+                <filteritem type="filepath" name="src/profiling/memory/shared_ring_buffer_fuzzer_corpus/read"
+                    desc="" />
             </filefilter>
         </filefilterlist>
+         <licensematcher name="Apache-2.0" desc="">
+                <licensetext name="
+                Name: Perfetto
+                URL: https://android.googlesource.com/platform/external/perfetto/
+                Version: unknown
+                License: Apache2
+                License File: LICENSE
+                Security Critical: yes
+                License Android Compatible: yes
+                Description: Performance instrumentation and logging for Google client platforms
+                Local Modifications: None
+            " desc="" />
+            </licensematcher>
+            <licensematcher name="Apache-2.0" desc="">
+                <licensetext name="
+                package {
+                // See: http://go/android-license-faq
+                // A large-scale-change added 'default_applicable_licenses' to import
+                // all of the 'license_kinds' from &quot;external_perfetto_license&quot;
+                // to get the below license kinds:
+                //   SPDX-license-identifier-Apache-2.0
+                default_applicable_licenses: [&quot;external_perfetto_license&quot;],
+                }
+            " desc="" />
+            </licensematcher>
+            <licensematcher name="Apache-2.0" desc="">
+                <licensetext name="
+                package {
+                // See: http://go/android-license-faq
+                // A large-scale-change added &apos;default_applicable_licenses&apos; to import
+                // all of the &apos;license_kinds&apos; from &quot;external_perfetto_license&quot;
+                // to get the below license kinds:
+                //   SPDX-license-identifier-Apache-2.0
+                default_applicable_licenses: [&quot;external_perfetto_license&quot;],
+                }
+            " desc="" />
+            </licensematcher>
+            
         <licensematcherlist>
         </licensematcherlist>
     </oatconfig>
