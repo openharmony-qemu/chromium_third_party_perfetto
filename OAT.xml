@@ -101,9 +101,7 @@ used to filter file path.
                 Description: Performance instrumentation and logging for Google client platforms
                 Local Modifications: None
             " desc="" />
-            </licensematcher>
-            <licensematcher name="Apache-2.0" desc="">
-                <licensetext name="
+                 <licensetext name="
                 package {
                 // See: http://go/android-license-faq
                 // A large-scale-change added 'default_applicable_licenses' to import
@@ -112,10 +110,8 @@ used to filter file path.
                 //   SPDX-license-identifier-Apache-2.0
                 default_applicable_licenses: [&quot;external_perfetto_license&quot;],
                 }
-            " desc="" />
-            </licensematcher>
-            <licensematcher name="Apache-2.0" desc="">
-                <licensetext name="
+            " desc="" /> 
+                 <licensetext name="
                 package {
                 // See: http://go/android-license-faq
                 // A large-scale-change added &apos;default_applicable_licenses&apos; to import

@@ -6,6 +6,6 @@
         "Version Number": "585716d40f6593c3e04780d670e1e95fcce3052a",
         "Owner": "huangjiewen2@huawei.com",
         "Upstream URL": "https://chromium.googlesource.com/platform/external/perfetto.git@585716d40f6593c3e04780d670e1e95fcce3052a",
-        "Description": "第三方软件perfetto"
+        "Description": "第三方软件perfetto，适用于Android、Linux 和 Chrome 的成熟开源跟踪项目"
     }
 ]
