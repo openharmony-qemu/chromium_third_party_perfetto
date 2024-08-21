@@ -199,6 +199,7 @@ struct DefaultDataSourceTraits {
 template <typename DerivedDataSource,
           typename DataSourceTraits = DefaultDataSourceTraits>
 class DataSource : public DataSourceBase {
+ private:
   struct DefaultTracePointTraits;
 
  public:
