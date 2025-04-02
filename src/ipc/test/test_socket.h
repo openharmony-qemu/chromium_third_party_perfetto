@@ -55,7 +55,7 @@ base::SockFamily TestSocket::family() {
 }
 void TestSocket::Destroy() {}
 
-#elif PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID) || (PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX) && BUILDFLAG(IS_OHOS))
+#elif PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID)
 
 const char* TestSocket::name() {
   snprintf(buf_, sizeof(buf_), "@%s", test_name_);

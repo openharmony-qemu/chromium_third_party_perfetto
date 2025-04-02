@@ -33,7 +33,7 @@ It uses a non-privileged gmail account and has no meaningful voting power.
 
 The controller loop does mainly the following:
 
-- It periodically (every 5s) polls Gerrit for CLs updated in the last 24h.
+- It periodically (every 15s) polls Gerrit for CLs updated in the last 24h.
 - It checks the list of CLs against the list of already known CLs in the DB.
 - For each new CL it enqueues `N` new jobs in the database, one for each
   configuration defined in [config.py](/infra/ci/config.py) (e.g. `linux-debug`,
@@ -51,7 +51,7 @@ The frontend is an AppEngine service that hosts the CI website @
 Conversely to the Controller, it is exposed to the public via HTTP.
 
 - It's an almost fully static website based on HTML and Javascript.
-- The only backend-side code ([frontend.py](/infra/ci/frontend/frontend.py))
+- The only backend-side code ([frontend.py](/infra/ci/frontend/main.py))
   is used to proxy XHR GET requests to Gerrit, due to the lack of Gerrit
   CORS headers.
 - Such XHR requests are GET-only and anonymous.
@@ -134,7 +134,7 @@ full-copy of the DB.
 /ci
     # For post-submit jobs.
     /branches
-        /master-20190626000853
+        /main-20190626000853
         # ┃     ┗━ Committer-date of the HEAD of the branch.
         # ┗━ Branch name
         {
@@ -144,12 +144,12 @@ full-copy of the DB.
             time_committed: "2019-07-06T02:35:14Z"
             jobs:
             {
-                20190708153242--branches-master-20190626000853--android-...: 0
-                20190708153242--branches-master-20190626000853--linux-...:  0
+                20190708153242--branches-main-20190626000853--android-...: 0
+                20190708153242--branches-main-20190626000853--linux-...:  0
                 ...
             }
         }
-        /master-20190701235742 {...}
+        /main-20190701235742 {...}
 
     # For pre-submit jobs.
     /cls
@@ -304,8 +304,6 @@ but this involves:
 
 - Manually stopping the production AppEngine instance via the Cloud Console
   (stopping via the `gcloud` cli doesn't seem to work, b/136828660)
-- Downloading the testing service credentials `test-credentials.json`
-  (they are in the internal Team drive).
 
 ### Worker/Sandbox changes
 

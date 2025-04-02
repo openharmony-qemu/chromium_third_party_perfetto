@@ -17,8 +17,6 @@
 #ifndef INCLUDE_PERFETTO_BASE_BUILD_CONFIG_H_
 #define INCLUDE_PERFETTO_BASE_BUILD_CONFIG_H_
 
-#include "build/build_config.h"
-
 // Allows to define build flags that give a compiler error if the header that
 // defined the flag is not included, instead of silently ignoring the #if block.
 #define PERFETTO_BUILDFLAG_CAT_INDIRECT(a, b) a##b
@@ -26,26 +24,9 @@
 #define PERFETTO_BUILDFLAG(flag) \
   (PERFETTO_BUILDFLAG_CAT(PERFETTO_BUILDFLAG_DEFINE_, flag)())
 
-#if BUILDFLAG(IS_OHOS)
-#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_ANDROID() 0
-#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_LINUX() 1
-#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_WIN() 0
-#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_APPLE() 0
-#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_MAC() 0
-#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_IOS() 0
-#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_WASM() 0
-#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_FUCHSIA() 0
-#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_NACL() 0
-#endif
-
-#if defined(__ANDROID__) && !BUILDFLAG(IS_OHOS)
-#if defined(__MUSL__)
-#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_ANDROID() 0
-#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_LINUX() 1
-#else
+#if defined(__ANDROID__)
 #define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_ANDROID() 1
 #define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_LINUX() 0
-#endif
 #define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_WIN() 0
 #define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_APPLE() 0
 #define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_MAC() 0
@@ -128,7 +109,7 @@
 #define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_COMPILER_CLANG() 1
 #define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_COMPILER_GCC() 0
 #define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_COMPILER_MSVC() 0
-#elif defined(__GNUC__) // Careful: Clang also defines this!
+#elif defined(__GNUC__)  // Careful: Clang also defines this!
 #define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_COMPILER_CLANG() 0
 #define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_COMPILER_GCC() 1
 #define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_COMPILER_MSVC() 0
@@ -146,6 +127,22 @@
 #define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_ANDROID_USERDEBUG_BUILD() 1
 #else
 #define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_ANDROID_USERDEBUG_BUILD() 0
+#endif
+
+// Processor architecture detection.  For more info on what's defined, see:
+//   http://msdn.microsoft.com/en-us/library/b0084kay.aspx
+//   http://www.agner.org/optimize/calling_conventions.pdf
+//   or with gcc, run: "echo | gcc -E -dM -"
+#if defined(__aarch64__) || defined(_M_ARM64)
+#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_ARCH_CPU_ARM64() 1
+#else
+#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_ARCH_CPU_ARM64() 0
+#endif
+
+#if defined(__x86_64__) || defined(_M_X64)
+#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_ARCH_CPU_X86_64() 1
+#else
+#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_ARCH_CPU_X86_64() 0
 #endif
 
 // perfetto_build_flags.h contains the tweakable build flags defined via GN.

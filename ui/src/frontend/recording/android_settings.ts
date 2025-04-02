@@ -13,23 +13,24 @@
 // limitations under the License.
 
 import m from 'mithril';
-
-import {DataSourceDescriptor} from '../../common/protos';
-import {globals} from '../globals';
-import {
-  Dropdown,
-  DropdownAttrs,
-  Probe,
-  ProbeAttrs,
-  Slider,
-  SliderAttrs,
-  Textarea,
-  TextareaAttrs,
-  Toggle,
-  ToggleAttrs,
-} from '../record_widgets';
-
+import {AtomId, DataSourceDescriptor} from '../../protos';
+import {Dropdown, Probe, Slider, Textarea, Toggle} from '../record_widgets';
 import {RecordingSectionAttrs} from './recording_sections';
+import {RecordConfig} from '../../controller/record_config_types';
+
+const PUSH_ATOM_IDS = new Map<string, string>();
+const PULL_ATOM_IDS = new Map<string, string>();
+for (const key in AtomId) {
+  if (!Object.hasOwn(AtomId, key)) continue;
+  const value = Number(AtomId[key]);
+  if (!isNaN(value)) {
+    if (value > 2 && value < 9999) {
+      PUSH_ATOM_IDS.set(String(value), key);
+    } else if (value >= 10000 && value < 99999) {
+      PULL_ATOM_IDS.set(String(value), key);
+    }
+  }
+}
 
 const LOG_BUFFERS = new Map<string, string>();
 LOG_BUFFERS.set('LID_CRASH', 'Crash');
@@ -70,39 +71,50 @@ DEFAULT_ATRACE_CATEGORIES.set('view', 'View System');
 DEFAULT_ATRACE_CATEGORIES.set('webview', 'WebView');
 DEFAULT_ATRACE_CATEGORIES.set('wm', 'Window Manager');
 
-function isDataSourceDescriptor(descriptor: unknown):
-    descriptor is DataSourceDescriptor {
+function isDataSourceDescriptor(
+  descriptor: unknown,
+): descriptor is DataSourceDescriptor {
   if (descriptor instanceof Object) {
     return (descriptor as DataSourceDescriptor).name !== undefined;
   }
   return false;
 }
 
-class AtraceAppsList implements m.ClassComponent {
-  view() {
-    if (globals.state.recordConfig.allAtraceApps) {
+interface AtraceAppsListAttrs {
+  recCfg: RecordConfig;
+}
+
+class AtraceAppsList implements m.ClassComponent<AtraceAppsListAttrs> {
+  view({attrs}: m.CVnode<AtraceAppsListAttrs>) {
+    if (attrs.recCfg.allAtraceApps) {
       return m('div');
     }
 
     return m(Textarea, {
-      placeholder: 'Apps to profile, one per line, e.g.:\n' +
-          'com.android.phone\n' +
-          'lmkd\n' +
-          'com.android.nfc',
-      cssClass: '.atrace-apps-list',
-      set: (cfg, val) => cfg.atraceApps = val,
+      placeholder:
+        'Apps to profile, one per line, e.g.:\n' +
+        'com.android.phone\n' +
+        'lmkd\n' +
+        'com.android.nfc',
+      cssClass: '.record-apps-list',
+      set: (cfg, val) => (cfg.atraceApps = val),
       get: (cfg) => cfg.atraceApps,
-    } as TextareaAttrs);
+      recCfg: attrs.recCfg,
+    });
   }
 }
 
-export class AndroidSettings implements
-    m.ClassComponent<RecordingSectionAttrs> {
+export class AndroidSettings
+  implements m.ClassComponent<RecordingSectionAttrs>
+{
   view({attrs}: m.CVnode<RecordingSectionAttrs>) {
+    const recCfg = attrs.recState.recordConfig;
     let atraceCategories = DEFAULT_ATRACE_CATEGORIES;
     for (const dataSource of attrs.dataSources) {
-      if (dataSource.name !== 'linux.ftrace' ||
-          !isDataSourceDescriptor(dataSource.descriptor)) {
+      if (
+        dataSource.name !== 'linux.ftrace' ||
+        !isDataSourceDescriptor(dataSource.descriptor)
+      ) {
         continue;
       }
       const atraces = dataSource.descriptor.ftraceDescriptor?.atraceCategories;
@@ -113,84 +125,161 @@ export class AndroidSettings implements
       atraceCategories = new Map<string, string>();
       for (const atrace of atraces) {
         if (atrace.name) {
-          atraceCategories.set(atrace.name, atrace.description || '');
+          atraceCategories.set(atrace.name, atrace.description ?? '');
         }
       }
     }
 
     return m(
-        `.record-section${attrs.cssClass}`,
-        m(Probe,
-          {
-            title: 'Atrace userspace annotations',
-            img: 'rec_atrace.png',
-            descr: `Enables C++ / Java codebase annotations (ATRACE_BEGIN() /
+      `.record-section${attrs.cssClass}`,
+      m(
+        Probe,
+        {
+          title: 'Atrace userspace annotations',
+          img: 'rec_atrace.png',
+          descr: `Enables C++ / Java codebase annotations (ATRACE_BEGIN() /
                       os.Trace())`,
-            setEnabled: (cfg, val) => cfg.atrace = val,
-            isEnabled: (cfg) => cfg.atrace,
-          } as ProbeAttrs,
-          m(Dropdown, {
-            title: 'Categories',
-            cssClass: '.multicolumn.atrace-categories',
-            options: atraceCategories,
-            set: (cfg, val) => cfg.atraceCats = val,
-            get: (cfg) => cfg.atraceCats,
-          } as DropdownAttrs),
-          m(Toggle, {
-            title: 'Record events from all Android apps and services',
-            descr: '',
-            setEnabled: (cfg, val) => cfg.allAtraceApps = val,
-            isEnabled: (cfg) => cfg.allAtraceApps,
-          } as ToggleAttrs),
-          m(AtraceAppsList)),
-        m(Probe,
-          {
-            title: 'Event log (logcat)',
-            img: 'rec_logcat.png',
-            descr: `Streams the event log into the trace. If no buffer filter is
+          setEnabled: (cfg, val) => (cfg.atrace = val),
+          isEnabled: (cfg) => cfg.atrace,
+          recCfg,
+        },
+        m(Dropdown, {
+          title: 'Categories',
+          cssClass: '.multicolumn.atrace-categories',
+          options: atraceCategories,
+          set: (cfg, val) => (cfg.atraceCats = val),
+          get: (cfg) => cfg.atraceCats,
+          recCfg,
+        }),
+        m(Toggle, {
+          title: 'Record events from all Android apps and services',
+          descr: '',
+          setEnabled: (cfg, val) => (cfg.allAtraceApps = val),
+          isEnabled: (cfg) => cfg.allAtraceApps,
+          recCfg,
+        }),
+        m(AtraceAppsList, {recCfg}),
+      ),
+      m(
+        Probe,
+        {
+          title: 'Event log (logcat)',
+          img: 'rec_logcat.png',
+          descr: `Streams the event log into the trace. If no buffer filter is
                       specified, all buffers are selected.`,
-            setEnabled: (cfg, val) => cfg.androidLogs = val,
-            isEnabled: (cfg) => cfg.androidLogs,
-          } as ProbeAttrs,
-          m(Dropdown, {
-            title: 'Buffers',
-            cssClass: '.multicolumn',
-            options: LOG_BUFFERS,
-            set: (cfg, val) => cfg.androidLogBuffers = val,
-            get: (cfg) => cfg.androidLogBuffers,
-          } as DropdownAttrs)),
-        m(Probe, {
-          title: 'Frame timeline',
-          img: 'rec_frame_timeline.png',
-          descr: `Records expected/actual frame timings from surface_flinger.
+          setEnabled: (cfg, val) => (cfg.androidLogs = val),
+          isEnabled: (cfg) => cfg.androidLogs,
+          recCfg,
+        },
+        m(Dropdown, {
+          title: 'Buffers',
+          cssClass: '.multicolumn',
+          options: LOG_BUFFERS,
+          set: (cfg, val) => (cfg.androidLogBuffers = val),
+          get: (cfg) => cfg.androidLogBuffers,
+          recCfg,
+        }),
+      ),
+      m(Probe, {
+        title: 'Frame timeline',
+        img: 'rec_frame_timeline.png',
+        descr: `Records expected/actual frame timings from surface_flinger.
                       Requires Android 12 (S) or above.`,
-          setEnabled: (cfg, val) => cfg.androidFrameTimeline = val,
-          isEnabled: (cfg) => cfg.androidFrameTimeline,
-        } as ProbeAttrs),
-        m(Probe, {
-          title: 'Game intervention list',
-          img: '',
-          descr: `List game modes and interventions.
+        setEnabled: (cfg, val) => (cfg.androidFrameTimeline = val),
+        isEnabled: (cfg) => cfg.androidFrameTimeline,
+        recCfg,
+      }),
+      m(Probe, {
+        title: 'Game intervention list',
+        img: '',
+        descr: `List game modes and interventions.
                     Requires Android 13 (T) or above.`,
-          setEnabled: (cfg, val) => cfg.androidGameInterventionList = val,
-          isEnabled: (cfg) => cfg.androidGameInterventionList,
-        } as ProbeAttrs),
-        m(Probe,
-          {
-            title: 'Network Tracing',
-            img: '',
-            descr: `Records detailed information on network packets.
+        setEnabled: (cfg, val) => (cfg.androidGameInterventionList = val),
+        isEnabled: (cfg) => cfg.androidGameInterventionList,
+        recCfg,
+      }),
+      m(
+        Probe,
+        {
+          title: 'Network Tracing',
+          img: '',
+          descr: `Records detailed information on network packets.
                       Requires Android 14 (U) or above.`,
-            setEnabled: (cfg, val) => cfg.androidNetworkTracing = val,
-            isEnabled: (cfg) => cfg.androidNetworkTracing,
-          } as ProbeAttrs,
-          m(Slider, {
-            title: 'Poll interval',
-            cssClass: '.thin',
-            values: [100, 250, 500, 1000, 2500],
-            unit: 'ms',
-            set: (cfg, val) => cfg.androidNetworkTracingPollMs = val,
-            get: (cfg) => cfg.androidNetworkTracingPollMs,
-          } as SliderAttrs)));
+          setEnabled: (cfg, val) => (cfg.androidNetworkTracing = val),
+          isEnabled: (cfg) => cfg.androidNetworkTracing,
+          recCfg,
+        },
+        m(Slider, {
+          title: 'Poll interval',
+          cssClass: '.thin',
+          values: [100, 250, 500, 1000, 2500],
+          unit: 'ms',
+          set: (cfg, val) => (cfg.androidNetworkTracingPollMs = val),
+          get: (cfg) => cfg.androidNetworkTracingPollMs,
+          recCfg,
+        }),
+      ),
+      m(
+        Probe,
+        {
+          title: 'Statsd Atoms',
+          img: '',
+          descr:
+            "Record instances of statsd atoms to the 'Statsd Atoms' track.",
+          setEnabled: (cfg, val) => (cfg.androidStatsd = val),
+          isEnabled: (cfg) => cfg.androidStatsd,
+          recCfg,
+        },
+        m(Dropdown, {
+          title: 'Pushed Atoms',
+          cssClass: '.singlecolumn',
+          options: PUSH_ATOM_IDS,
+          set: (cfg, val) => (cfg.androidStatsdPushedAtoms = val),
+          get: (cfg) => cfg.androidStatsdPushedAtoms,
+          recCfg,
+        }),
+        m(Textarea, {
+          placeholder:
+            'Add raw pushed atoms IDs, one per line, e.g.:\n' + '818\n' + '819',
+          set: (cfg, val) => (cfg.androidStatsdRawPushedAtoms = val),
+          get: (cfg) => cfg.androidStatsdRawPushedAtoms,
+          recCfg,
+        }),
+        m(Dropdown, {
+          title: 'Pulled Atoms',
+          cssClass: '.singlecolumn',
+          options: PULL_ATOM_IDS,
+          set: (cfg, val) => (cfg.androidStatsdPulledAtoms = val),
+          get: (cfg) => cfg.androidStatsdPulledAtoms,
+          recCfg,
+        }),
+        m(Textarea, {
+          placeholder:
+            'Add raw pulled atom IDs, one per line, e.g.:\n' +
+            '10063\n' +
+            '10064\n',
+          set: (cfg, val) => (cfg.androidStatsdRawPulledAtoms = val),
+          get: (cfg) => cfg.androidStatsdRawPulledAtoms,
+          recCfg,
+        }),
+        m(Slider, {
+          title: 'Pulled atom pull frequency (ms)',
+          cssClass: '.thin',
+          values: [500, 1000, 5000, 30000, 60000],
+          unit: 'ms',
+          set: (cfg, val) => (cfg.androidStatsdPulledAtomPullFrequencyMs = val),
+          get: (cfg) => cfg.androidStatsdPulledAtomPullFrequencyMs,
+          recCfg,
+        }),
+        m(Textarea, {
+          placeholder:
+            'Add pulled atom packages, one per line, e.g.:\n' +
+            'com.android.providers.telephony',
+          set: (cfg, val) => (cfg.androidStatsdPulledAtomPackages = val),
+          get: (cfg) => cfg.androidStatsdPulledAtomPackages,
+          recCfg,
+        }),
+      ),
+    );
   }
 }

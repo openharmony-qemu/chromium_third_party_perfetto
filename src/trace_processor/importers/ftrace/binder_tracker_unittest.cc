@@ -16,11 +16,13 @@
 
 #include "src/trace_processor/importers/ftrace/binder_tracker.h"
 
-#include "perfetto/base/logging.h"
+#include <cstdint>
+
 #include "src/trace_processor/importers/common/args_tracker.h"
 #include "src/trace_processor/importers/common/args_translation_table.h"
 #include "src/trace_processor/importers/common/event_tracker.h"
 #include "src/trace_processor/importers/common/flow_tracker.h"
+#include "src/trace_processor/importers/common/global_args_tracker.h"
 #include "src/trace_processor/importers/common/process_tracker.h"
 #include "src/trace_processor/importers/common/slice_tracker.h"
 #include "src/trace_processor/importers/common/slice_translation_table.h"
@@ -28,8 +30,7 @@
 #include "src/trace_processor/storage/trace_storage.h"
 #include "test/gtest_and_gmock.h"
 
-namespace perfetto {
-namespace trace_processor {
+namespace perfetto::trace_processor {
 namespace {
 constexpr int kOneWay = 0x01;
 
@@ -83,22 +84,23 @@ TEST_F(BinderTrackerTest, RequestReply) {
   ASSERT_EQ(slice.row_count(), 2u);
 
   auto tid_for_slice = [&](uint32_t row) {
-    TrackId track_id = slice.track_id()[row];
-    UniqueTid utid = track.utid()[*track.id().IndexOf(track_id)];
-    return thread.tid()[utid];
+    auto rr = track.FindById(slice[row].track_id());
+    return thread[rr->utid()].tid();
   };
 
-  ASSERT_EQ(slice.ts()[0], req_ts);
-  ASSERT_EQ(slice.dur()[0], rep_recv_ts - req_ts);
+  ASSERT_EQ(slice[0].ts(), req_ts);
+  ASSERT_EQ(slice[0].dur(), rep_recv_ts - req_ts);
   ASSERT_EQ(tid_for_slice(0), req_tid);
 
-  ASSERT_EQ(slice.ts()[1], req_recv_ts);
-  ASSERT_EQ(slice.dur()[1], rep_ts - req_recv_ts);
+  ASSERT_EQ(slice[1].ts(), req_recv_ts);
+  ASSERT_EQ(slice[1].dur(), rep_ts - req_recv_ts);
   ASSERT_EQ(tid_for_slice(1), rep_tid);
 
   ASSERT_EQ(flow.row_count(), 1u);
-  ASSERT_EQ(flow.slice_out()[0], slice.id()[0]);
-  ASSERT_EQ(flow.slice_in()[0], slice.id()[1]);
+  ASSERT_EQ(flow[0].slice_out(), slice[0].id());
+  ASSERT_EQ(flow[0].slice_in(), slice[1].id());
+
+  EXPECT_TRUE(binder_tracker->utid_stacks_empty());
 }
 
 TEST_F(BinderTrackerTest, Oneway) {
@@ -121,24 +123,218 @@ TEST_F(BinderTrackerTest, Oneway) {
   ASSERT_EQ(slice.row_count(), 2u);
 
   auto tid_for_slice = [&](uint32_t row) {
-    TrackId track_id = slice.track_id()[row];
-    UniqueTid utid = track.utid()[*track.id().IndexOf(track_id)];
-    return thread.tid()[utid];
+    TrackId track_id = slice[row].track_id();
+    auto rr = track.FindById(track_id);
+    return thread[rr->utid()].tid();
   };
 
-  ASSERT_EQ(slice.ts()[0], sen_ts);
-  ASSERT_EQ(slice.dur()[0], 0);
+  ASSERT_EQ(slice[0].ts(), sen_ts);
+  ASSERT_EQ(slice[0].dur(), 0);
   ASSERT_EQ(tid_for_slice(0), sen_tid);
 
-  ASSERT_EQ(slice.ts()[1], rec_ts);
-  ASSERT_EQ(slice.dur()[1], 0);
+  ASSERT_EQ(slice[1].ts(), rec_ts);
+  ASSERT_EQ(slice[1].dur(), 0);
   ASSERT_EQ(tid_for_slice(1), rec_tid);
 
   ASSERT_EQ(flow.row_count(), 1u);
-  ASSERT_EQ(flow.slice_out()[0], slice.id()[0]);
-  ASSERT_EQ(flow.slice_in()[0], slice.id()[1]);
+  ASSERT_EQ(flow[0].slice_out(), slice[0].id());
+  ASSERT_EQ(flow[0].slice_in(), slice[1].id());
+
+  EXPECT_TRUE(binder_tracker->utid_stacks_empty());
+}
+
+TEST_F(BinderTrackerTest, RequestReplyWithCommands) {
+  constexpr uint32_t kSndTid = 5;
+  constexpr uint32_t kRcvTid = 10;
+
+  constexpr int32_t kTransactionId = 1234;
+  constexpr int32_t kReplyTransactionId = 5678;
+
+  int64_t ts = 1;
+  binder_tracker->CommandToKernel(ts++, kSndTid,
+                                  BinderTracker::kBC_TRANSACTION);
+  binder_tracker->Transaction(ts++, kSndTid, kTransactionId, 9, kRcvTid,
+                              kRcvTid, false, 0, kNullStringId);
+  binder_tracker->TransactionReceived(ts++, kRcvTid, kTransactionId);
+  binder_tracker->ReturnFromKernel(ts++, kRcvTid,
+                                   BinderTracker::kBR_TRANSACTION);
+  binder_tracker->CommandToKernel(ts++, kRcvTid, BinderTracker::kBC_REPLY);
+  binder_tracker->Transaction(ts++, kRcvTid, kReplyTransactionId, 99, kSndTid,
+                              kSndTid, true, 0, kNullStringId);
+  binder_tracker->ReturnFromKernel(ts++, kRcvTid,
+                                   BinderTracker::kBR_TRANSACTION_COMPLETE);
+  binder_tracker->ReturnFromKernel(ts++, kSndTid,
+                                   BinderTracker::kBR_TRANSACTION_COMPLETE);
+  binder_tracker->TransactionReceived(ts++, kSndTid, kReplyTransactionId);
+  binder_tracker->ReturnFromKernel(ts++, kSndTid, BinderTracker::kBR_REPLY);
+
+  const auto& slice = context.storage->slice_table();
+  ASSERT_EQ(slice.row_count(), 2u);
+  EXPECT_NE(slice[0].dur(), -1);
+  EXPECT_NE(slice[1].dur(), -1);
+
+  EXPECT_TRUE(binder_tracker->utid_stacks_empty());
+}
+
+TEST_F(BinderTrackerTest, RequestReplyWithCommandsFailAfterBcTransaction) {
+  constexpr uint32_t kSndTid = 5;
+
+  int64_t ts = 1;
+  binder_tracker->CommandToKernel(ts++, kSndTid,
+                                  BinderTracker::kBC_TRANSACTION);
+  binder_tracker->ReturnFromKernel(ts++, kSndTid,
+                                   BinderTracker::kBR_DEAD_REPLY);
+
+  const auto& slice = context.storage->slice_table();
+  EXPECT_EQ(slice.row_count(), 0u);
+
+  EXPECT_TRUE(binder_tracker->utid_stacks_empty());
+}
+
+TEST_F(BinderTrackerTest, RequestReplyWithCommandsFailAfterSendTxn) {
+  constexpr uint32_t kSndTid = 5;
+  constexpr uint32_t kRcvTid = 10;
+
+  constexpr int32_t kTransactionId = 1234;
+
+  int64_t ts = 1;
+  binder_tracker->CommandToKernel(ts++, kSndTid,
+                                  BinderTracker::kBC_TRANSACTION);
+  binder_tracker->Transaction(ts++, kSndTid, kTransactionId, 9, kRcvTid,
+                              kRcvTid, false, 0, kNullStringId);
+  binder_tracker->ReturnFromKernel(ts++, kSndTid,
+                                   BinderTracker::kBR_FAILED_REPLY);
+
+  const auto& slice = context.storage->slice_table();
+  ASSERT_EQ(slice.row_count(), 1u);
+  EXPECT_NE(slice[0].dur(), -1);
+
+  EXPECT_TRUE(binder_tracker->utid_stacks_empty());
+}
+
+TEST_F(BinderTrackerTest, RequestReplyWithCommandsFailBeforeReplyTxn) {
+  constexpr uint32_t kSndTid = 5;
+  constexpr uint32_t kRcvTid = 10;
+
+  constexpr int32_t kTransactionId = 1234;
+
+  int64_t ts = 1;
+  binder_tracker->CommandToKernel(ts++, kSndTid,
+                                  BinderTracker::kBC_TRANSACTION);
+  binder_tracker->Transaction(ts++, kSndTid, kTransactionId, 9, kRcvTid,
+                              kRcvTid, false, 0, kNullStringId);
+  binder_tracker->TransactionReceived(ts++, kRcvTid, kTransactionId);
+  binder_tracker->ReturnFromKernel(ts++, kRcvTid,
+                                   BinderTracker::kBR_TRANSACTION);
+  binder_tracker->CommandToKernel(ts++, kRcvTid, BinderTracker::kBC_REPLY);
+  binder_tracker->ReturnFromKernel(ts++, kRcvTid,
+                                   BinderTracker::kBR_FAILED_REPLY);
+  binder_tracker->ReturnFromKernel(ts++, kSndTid,
+                                   BinderTracker::kBR_TRANSACTION_COMPLETE);
+  binder_tracker->ReturnFromKernel(ts++, kSndTid,
+                                   BinderTracker::kBR_FAILED_REPLY);
+
+  const auto& slice = context.storage->slice_table();
+  ASSERT_EQ(slice.row_count(), 2u);
+  EXPECT_NE(slice[0].dur(), -1);
+  EXPECT_NE(slice[1].dur(), -1);
+
+  EXPECT_TRUE(binder_tracker->utid_stacks_empty());
+}
+
+TEST_F(BinderTrackerTest, RequestReplyWithCommandsFailAfterReplyTxn) {
+  constexpr uint32_t kSndTid = 5;
+  constexpr uint32_t kRcvTid = 10;
+
+  constexpr int32_t kTransactionId = 1234;
+  constexpr int32_t kReplyTransactionId = 5678;
+
+  int64_t ts = 1;
+  binder_tracker->CommandToKernel(ts++, kSndTid,
+                                  BinderTracker::kBC_TRANSACTION);
+  binder_tracker->Transaction(ts++, kSndTid, kTransactionId, 9, kRcvTid,
+                              kRcvTid, false, 0, kNullStringId);
+  binder_tracker->TransactionReceived(ts++, kRcvTid, kTransactionId);
+  binder_tracker->ReturnFromKernel(ts++, kRcvTid,
+                                   BinderTracker::kBR_TRANSACTION);
+  binder_tracker->CommandToKernel(ts++, kRcvTid, BinderTracker::kBC_REPLY);
+  binder_tracker->Transaction(ts++, kRcvTid, kReplyTransactionId, 99, kSndTid,
+                              kSndTid, true, 0, kNullStringId);
+  binder_tracker->ReturnFromKernel(ts++, kRcvTid,
+                                   BinderTracker::kBR_TRANSACTION_COMPLETE);
+  binder_tracker->ReturnFromKernel(ts++, kSndTid,
+                                   BinderTracker::kBR_TRANSACTION_COMPLETE);
+  binder_tracker->ReturnFromKernel(ts++, kSndTid,
+                                   BinderTracker::kBR_FAILED_REPLY);
+
+  const auto& slice = context.storage->slice_table();
+  ASSERT_EQ(slice.row_count(), 2u);
+  EXPECT_NE(slice[0].dur(), -1);
+  EXPECT_NE(slice[1].dur(), -1);
+
+  EXPECT_TRUE(binder_tracker->utid_stacks_empty());
+}
+
+TEST_F(BinderTrackerTest, OneWayWithCommands) {
+  constexpr uint32_t kSndTid = 5;
+  constexpr uint32_t kRcvTid = 10;
+
+  constexpr int32_t kTransactionId = 1234;
+
+  int64_t ts = 1;
+  binder_tracker->CommandToKernel(ts++, kSndTid,
+                                  BinderTracker::kBC_TRANSACTION);
+  binder_tracker->Transaction(ts++, kSndTid, kTransactionId, 9, kRcvTid,
+                              kRcvTid, false, kOneWay, kNullStringId);
+  binder_tracker->ReturnFromKernel(ts++, kSndTid,
+                                   BinderTracker::kBR_TRANSACTION_COMPLETE);
+  binder_tracker->TransactionReceived(ts++, kRcvTid, kTransactionId);
+  binder_tracker->ReturnFromKernel(ts++, kRcvTid,
+                                   BinderTracker::kBR_TRANSACTION);
+
+  const auto& slice = context.storage->slice_table();
+  ASSERT_EQ(slice.row_count(), 2u);
+  EXPECT_EQ(slice[0].dur(), 0);
+  EXPECT_EQ(slice[1].dur(), 0);
+
+  EXPECT_TRUE(binder_tracker->utid_stacks_empty());
+}
+
+TEST_F(BinderTrackerTest, OneWayWithCommandsFailBeforeTxn) {
+  constexpr uint32_t kSndTid = 5;
+
+  int64_t ts = 1;
+  binder_tracker->CommandToKernel(ts++, kSndTid,
+                                  BinderTracker::kBC_TRANSACTION);
+  binder_tracker->ReturnFromKernel(ts++, kSndTid,
+                                   BinderTracker::kBR_FAILED_REPLY);
+
+  const auto& slice = context.storage->slice_table();
+  EXPECT_EQ(slice.row_count(), 0u);
+
+  EXPECT_TRUE(binder_tracker->utid_stacks_empty());
+}
+
+TEST_F(BinderTrackerTest, OneWayWithCommandsFailAfterTxn) {
+  constexpr uint32_t kSndTid = 5;
+  constexpr uint32_t kRcvTid = 10;
+
+  constexpr int32_t kTransactionId = 1234;
+
+  int64_t ts = 1;
+  binder_tracker->CommandToKernel(ts++, kSndTid,
+                                  BinderTracker::kBC_TRANSACTION);
+  binder_tracker->Transaction(ts++, kSndTid, kTransactionId, 9, kRcvTid,
+                              kRcvTid, false, kOneWay, kNullStringId);
+  binder_tracker->ReturnFromKernel(ts++, kSndTid,
+                                   BinderTracker::kBR_FAILED_REPLY);
+
+  const auto& slice = context.storage->slice_table();
+  ASSERT_EQ(slice.row_count(), 1u);
+  EXPECT_EQ(slice[0].dur(), 0);
+
+  EXPECT_TRUE(binder_tracker->utid_stacks_empty());
 }
 
 }  // namespace
-}  // namespace trace_processor
-}  // namespace perfetto
+}  // namespace perfetto::trace_processor

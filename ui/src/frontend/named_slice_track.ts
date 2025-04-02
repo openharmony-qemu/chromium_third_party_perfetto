@@ -12,74 +12,72 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import {Actions} from '../common/actions';
+import {getColorForSlice} from '../public/lib/colorizer';
+import {TrackEventDetailsPanel} from '../public/details_panel';
+import {TrackEventSelection} from '../public/selection';
+import {Slice} from '../public/track';
+import {STR_NULL} from '../trace_processor/query_result';
 import {
-  Color,
-  hslForSlice,
-} from '../common/colorizer';
-import {STR_NULL} from '../common/query_result';
-
-import {
-  BASE_SLICE_ROW,
+  BASE_ROW,
   BaseSliceTrack,
-  BaseSliceTrackTypes,
   OnSliceClickArgs,
   OnSliceOverArgs,
+  SLICE_FLAGS_INCOMPLETE,
+  SLICE_FLAGS_INSTANT,
 } from './base_slice_track';
-import {globals} from './globals';
+import {ThreadSliceDetailsPanel} from './thread_slice_details_tab';
 import {NewTrackArgs} from './track';
+import {renderDuration} from './widgets/duration';
+import {TraceImpl} from '../core/trace_impl';
+import {assertIsInstance} from '../base/logging';
 
-export const NAMED_SLICE_ROW = {
+export const NAMED_ROW = {
   // Base columns (tsq, ts, dur, id, depth).
-  ...BASE_SLICE_ROW,
+  ...BASE_ROW,
 
   // Impl-specific columns.
   name: STR_NULL,
 };
-export type NamedSliceRow = typeof NAMED_SLICE_ROW;
-
-export interface NamedSliceTrackTypes extends BaseSliceTrackTypes {
-  row: NamedSliceRow;
-}
+export type NamedRow = typeof NAMED_ROW;
 
 export abstract class NamedSliceTrack<
-    T extends NamedSliceTrackTypes = NamedSliceTrackTypes> extends
-    BaseSliceTrack<T> {
+  SliceType extends Slice = Slice,
+  RowType extends NamedRow = NamedRow,
+> extends BaseSliceTrack<SliceType, RowType> {
   constructor(args: NewTrackArgs) {
     super(args);
   }
 
-  // This is used by the base class to call iter().
-  getRowSpec(): T['row'] {
-    return NAMED_SLICE_ROW;
-  }
-
   // Converts a SQL result row to an "Impl" Slice.
-  rowToSlice(row: T['row']): T['slice'] {
-    const baseSlice = super.rowToSlice(row);
+  protected rowToSliceBase(row: RowType): Slice {
+    const baseSlice = super.rowToSliceBase(row);
     // Ignore PIDs or numeric arguments when hashing.
-    const name = row.name || '';
-    const nameForHashing = name.replace(/\s?\d+/g, '');
-    const hsl = hslForSlice(nameForHashing, /* isSelected=*/ false);
-    // We cache the color so we hash only once per query.
-    const baseColor: Color = {c: '', h: hsl[0], s: hsl[1], l: hsl[2]};
-    return {...baseSlice, title: name, baseColor};
+    const name = row.name ?? '';
+    const colorScheme = getColorForSlice(name);
+    return {...baseSlice, title: name, colorScheme};
   }
 
-  onSliceOver(args: OnSliceOverArgs<T['slice']>) {
-    const name = args.slice.title;
-    args.tooltip = [name];
+  onSliceOver(args: OnSliceOverArgs<SliceType>) {
+    const {title, dur, flags} = args.slice;
+    let duration;
+    if (flags & SLICE_FLAGS_INCOMPLETE) {
+      duration = 'Incomplete';
+    } else if (flags & SLICE_FLAGS_INSTANT) {
+      duration = 'Instant';
+    } else {
+      duration = renderDuration(dur);
+    }
+    args.tooltip = [`${title} - [${duration}]`];
   }
 
-  onSliceClick(args: OnSliceClickArgs<T['slice']>) {
-    globals.makeSelection(Actions.selectChromeSlice({
-      id: args.slice.id,
-      trackId: this.trackId,
+  onSliceClick(args: OnSliceClickArgs<SliceType>) {
+    this.trace.selection.selectTrackEvent(this.uri, args.slice.id);
+  }
 
-      // |table| here can be either 'slice' or 'annotation'. The
-      // AnnotationSliceTrack overrides the onSliceClick and sets this to
-      // 'annotation'
-      table: 'slice',
-    }));
+  detailsPanel(_sel: TrackEventSelection): TrackEventDetailsPanel {
+    // Rationale for the assertIsInstance: ThreadSliceDetailsPanel requires a
+    // TraceImpl (because of flows) but here we must take a Trace interface,
+    // because this class is exposed to plugins (which see only Trace).
+    return new ThreadSliceDetailsPanel(assertIsInstance(this.trace, TraceImpl));
   }
 }

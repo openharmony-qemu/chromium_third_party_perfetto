@@ -23,7 +23,6 @@
 #include "src/trace_processor/importers/common/slice_tracker.h"
 #include "src/trace_processor/importers/common/track_tracker.h"
 #include "src/trace_processor/importers/fuchsia/fuchsia_trace_utils.h"
-#include "src/trace_processor/importers/proto/proto_trace_parser.h"
 
 namespace perfetto {
 namespace trace_processor {
@@ -55,21 +54,14 @@ constexpr uint32_t kDouble = 5;
 constexpr uint32_t kString = 6;
 constexpr uint32_t kPointer = 7;
 constexpr uint32_t kKoid = 8;
+constexpr uint32_t kBool = 9;
 
 }  // namespace
 
 FuchsiaTraceParser::FuchsiaTraceParser(TraceProcessorContext* context)
-    : context_(context), proto_parser_(new ProtoTraceParser(context_)) {}
+    : context_(context) {}
 
 FuchsiaTraceParser::~FuchsiaTraceParser() = default;
-
-void FuchsiaTraceParser::ParseTrackEvent(int64_t ts, TrackEventData data) {
-  proto_parser_->ParseTrackEvent(ts, std::move(data));
-}
-
-void FuchsiaTraceParser::ParseTracePacket(int64_t ts, TracePacketData data) {
-  proto_parser_->ParseTracePacket(ts, std::move(data));
-}
 
 std::optional<std::vector<FuchsiaTraceParser::Arg>>
 FuchsiaTraceParser::ParseArgs(
@@ -167,6 +159,11 @@ FuchsiaTraceParser::ParseArgs(
           return std::nullopt;
         }
         arg.value = fuchsia_trace_utils::ArgValue::Koid(value);
+        break;
+      }
+      case kBool: {
+        arg.value = fuchsia_trace_utils::ArgValue::Bool(
+            fuchsia_trace_utils::ReadField<bool>(arg_header, 32, 63));
         break;
       }
       default:
@@ -325,6 +322,7 @@ void FuchsiaTraceParser::ParseFuchsiaRecord(int64_t, FuchsiaRecord fr) {
               case fuchsia_trace_utils::ArgValue::kString:
               case fuchsia_trace_utils::ArgValue::kPointer:
               case fuchsia_trace_utils::ArgValue::kKoid:
+              case fuchsia_trace_utils::ArgValue::kBool:
               case fuchsia_trace_utils::ArgValue::kUnknown:
                 context_->storage->IncrementStats(
                     stats::fuchsia_non_numeric_counters);
@@ -334,7 +332,7 @@ void FuchsiaTraceParser::ParseFuchsiaRecord(int64_t, FuchsiaRecord fr) {
               StringId counter_name_id = context_->storage->InternString(
                   base::StringView(counter_name_str));
               TrackId track =
-                  context_->track_tracker->InternProcessCounterTrack(
+                  context_->track_tracker->LegacyInternProcessCounterTrack(
                       counter_name_id, upid);
               context_->event_tracker->PushCounter(ts, counter_value, track);
             }
@@ -388,8 +386,9 @@ void FuchsiaTraceParser::ParseFuchsiaRecord(int64_t, FuchsiaRecord fr) {
           }
           UniquePid upid =
               procs->GetOrCreateProcess(static_cast<uint32_t>(tinfo.pid));
-          TrackId track_id = context_->track_tracker->InternFuchsiaAsyncTrack(
-              name, upid, correlation_id);
+          TrackId track_id =
+              context_->track_tracker->LegacyInternLegacyChromeAsyncTrack(
+                  name, upid, correlation_id, false, kNullStringId);
           slices->Begin(ts, track_id, cat, name, std::move(insert_args));
           break;
         }
@@ -401,8 +400,9 @@ void FuchsiaTraceParser::ParseFuchsiaRecord(int64_t, FuchsiaRecord fr) {
           }
           UniquePid upid =
               procs->GetOrCreateProcess(static_cast<uint32_t>(tinfo.pid));
-          TrackId track_id = context_->track_tracker->InternFuchsiaAsyncTrack(
-              name, upid, correlation_id);
+          TrackId track_id =
+              context_->track_tracker->LegacyInternLegacyChromeAsyncTrack(
+                  name, upid, correlation_id, false, kNullStringId);
           slices->Scoped(ts, track_id, cat, name, 0, std::move(insert_args));
           break;
         }
@@ -414,8 +414,9 @@ void FuchsiaTraceParser::ParseFuchsiaRecord(int64_t, FuchsiaRecord fr) {
           }
           UniquePid upid =
               procs->GetOrCreateProcess(static_cast<uint32_t>(tinfo.pid));
-          TrackId track_id = context_->track_tracker->InternFuchsiaAsyncTrack(
-              name, upid, correlation_id);
+          TrackId track_id =
+              context_->track_tracker->LegacyInternLegacyChromeAsyncTrack(
+                  name, upid, correlation_id, false, kNullStringId);
           slices->End(ts, track_id, cat, name, std::move(insert_args));
           break;
         }
