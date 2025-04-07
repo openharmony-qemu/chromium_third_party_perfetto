@@ -12,18 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import {Draft, produce} from 'immer';
 import m from 'mithril';
-
+import {copyToClipboard} from '../base/clipboard';
 import {assertExists} from '../base/logging';
-import {Actions} from '../common/actions';
 import {RecordConfig} from '../controller/record_config_types';
+import {raf} from '../core/raf_scheduler';
+import {assetSrc} from '../base/assets';
 
-import {copyToClipboard} from './clipboard';
-import {globals} from './globals';
-
-declare type Setter<T> = (draft: Draft<RecordConfig>, val: T) => void;
-declare type Getter<T> = (cfg: RecordConfig) => T;
+export declare type Setter<T> = (cfg: RecordConfig, val: T) => void;
+export declare type Getter<T> = (cfg: RecordConfig) => T;
 
 function defaultSort(a: string, b: string) {
   return a.localeCompare(b);
@@ -40,10 +37,11 @@ interface DocsChipAttrs {
 class DocsChip implements m.ClassComponent<DocsChipAttrs> {
   view({attrs}: m.CVnode<DocsChipAttrs>) {
     return m(
-        'a.inline-chip',
-        {href: attrs.href, title: 'Open docs in new tab', target: '_blank'},
-        m('i.material-icons', 'info'),
-        ' Docs');
+      'a.inline-chip',
+      {href: attrs.href, title: 'Open docs in new tab', target: '_blank'},
+      m('i.material-icons', 'info'),
+      ' Docs',
+    );
   }
 }
 
@@ -52,8 +50,9 @@ class DocsChip implements m.ClassComponent<DocsChipAttrs> {
 // +---------------------------------------------------------------------------+
 
 export interface ProbeAttrs {
+  recCfg: RecordConfig;
   title: string;
-  img: string|null;
+  img: string | null;
   compact?: boolean;
   descr: m.Children;
   isEnabled: Getter<boolean>;
@@ -63,47 +62,55 @@ export interface ProbeAttrs {
 export class Probe implements m.ClassComponent<ProbeAttrs> {
   view({attrs, children}: m.CVnode<ProbeAttrs>) {
     const onToggle = (enabled: boolean) => {
-      const traceCfg = produce(globals.state.recordConfig, (draft) => {
-        attrs.setEnabled(draft, enabled);
-      });
-      globals.dispatch(Actions.setRecordConfig({config: traceCfg}));
+      attrs.setEnabled(attrs.recCfg, enabled);
+      raf.scheduleFullRedraw();
     };
 
-    const enabled = attrs.isEnabled(globals.state.recordConfig);
+    const enabled = attrs.isEnabled(attrs.recCfg);
 
     return m(
-        `.probe${attrs.compact ? '.compact' : ''}${enabled ? '.enabled' : ''}`,
-        attrs.img && m('img', {
-          src: `${globals.root}assets/${attrs.img}`,
+      `.probe${attrs.compact ? '.compact' : ''}${enabled ? '.enabled' : ''}`,
+      attrs.img &&
+        m('img', {
+          src: assetSrc(`assets/${attrs.img}`),
           onclick: () => onToggle(!enabled),
         }),
-        m('label',
-          m(`input[type=checkbox]`, {
-            checked: enabled,
-            oninput: (e: InputEvent) => {
-              onToggle((e.target as HTMLInputElement).checked);
-            },
-          }),
-          m('span', attrs.title)),
-        attrs.compact ?
-            '' :
-            m('div', m('div', attrs.descr), m('.probe-config', children)));
+      m(
+        'label',
+        m(`input[type=checkbox]`, {
+          checked: enabled,
+          oninput: (e: InputEvent) => {
+            onToggle((e.target as HTMLInputElement).checked);
+          },
+        }),
+        m('span', attrs.title),
+      ),
+      attrs.compact
+        ? ''
+        : m(
+            `div${attrs.img ? '' : '.extended-desc'}`,
+            m('div', attrs.descr),
+            m('.probe-config', children),
+          ),
+    );
   }
 }
 
 export function CompactProbe(args: {
-  title: string,
-  isEnabled: Getter<boolean>,
-  setEnabled: Setter<boolean>
+  recCfg: RecordConfig;
+  title: string;
+  isEnabled: Getter<boolean>;
+  setEnabled: Setter<boolean>;
 }) {
   return m(Probe, {
+    recCfg: args.recCfg,
     title: args.title,
     img: null,
     compact: true,
     descr: '',
     isEnabled: args.isEnabled,
     setEnabled: args.setEnabled,
-  } as ProbeAttrs);
+  });
 }
 
 // +-------------------------------------------------------------+
@@ -111,6 +118,7 @@ export function CompactProbe(args: {
 // +-------------------------------------------------------------+
 
 export interface ToggleAttrs {
+  recCfg: RecordConfig;
   title: string;
   descr: string;
   cssClass?: string;
@@ -121,25 +129,26 @@ export interface ToggleAttrs {
 export class Toggle implements m.ClassComponent<ToggleAttrs> {
   view({attrs}: m.CVnode<ToggleAttrs>) {
     const onToggle = (enabled: boolean) => {
-      const traceCfg = produce(globals.state.recordConfig, (draft) => {
-        attrs.setEnabled(draft, enabled);
-      });
-      globals.dispatch(Actions.setRecordConfig({config: traceCfg}));
+      attrs.setEnabled(attrs.recCfg, enabled);
+      raf.scheduleFullRedraw();
     };
 
-    const enabled = attrs.isEnabled(globals.state.recordConfig);
+    const enabled = attrs.isEnabled(attrs.recCfg);
 
     return m(
-        `.toggle${enabled ? '.enabled' : ''}${attrs.cssClass || ''}`,
-        m('label',
-          m(`input[type=checkbox]`, {
-            checked: enabled,
-            oninput: (e: InputEvent) => {
-              onToggle((e.target as HTMLInputElement).checked);
-            },
-          }),
-          m('span', attrs.title)),
-        m('.descr', attrs.descr));
+      `.toggle${enabled ? '.enabled' : ''}${attrs.cssClass ?? ''}`,
+      m(
+        'label',
+        m(`input[type=checkbox]`, {
+          checked: enabled,
+          oninput: (e: InputEvent) => {
+            onToggle((e.target as HTMLInputElement).checked);
+          },
+        }),
+        m('span', attrs.title),
+      ),
+      m('.descr', attrs.descr),
+    );
   }
 }
 
@@ -148,6 +157,7 @@ export class Toggle implements m.ClassComponent<ToggleAttrs> {
 // +---------------------------------------------------------------------------+
 
 export interface SliderAttrs {
+  recCfg: RecordConfig;
   title: string;
   icon?: string;
   cssClass?: string;
@@ -164,10 +174,8 @@ export interface SliderAttrs {
 
 export class Slider implements m.ClassComponent<SliderAttrs> {
   onValueChange(attrs: SliderAttrs, newVal: number) {
-    const traceCfg = produce(globals.state.recordConfig, (draft) => {
-      attrs.set(draft, newVal);
-    });
-    globals.dispatch(Actions.setRecordConfig({config: traceCfg}));
+    attrs.set(attrs.recCfg, newVal);
+    raf.scheduleFullRedraw();
   }
 
   onTimeValueChange(attrs: SliderAttrs, hms: string) {
@@ -175,8 +183,7 @@ export class Slider implements m.ClassComponent<SliderAttrs> {
       const date = new Date(`1970-01-01T${hms}.000Z`);
       if (isNaN(date.getTime())) return;
       this.onValueChange(attrs, date.getTime());
-    } catch {
-    }
+    } catch {}
   }
 
   onSliderChange(attrs: SliderAttrs, newIdx: number) {
@@ -184,9 +191,10 @@ export class Slider implements m.ClassComponent<SliderAttrs> {
   }
 
   view({attrs}: m.CVnode<SliderAttrs>) {
-    const id = attrs.title.replace(/[^a-z0-9]/gmi, '_').toLowerCase();
+    const id = attrs.title.replace(/[^a-z0-9]/gim, '_').toLowerCase();
     const maxIdx = attrs.values.length - 1;
-    const val = attrs.get(globals.state.recordConfig);
+    const val = attrs.get(attrs.recCfg);
+    // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions
     let min = attrs.min || 1;
     if (attrs.zeroIsDefault) {
       min = Math.min(0, min);
@@ -196,14 +204,13 @@ export class Slider implements m.ClassComponent<SliderAttrs> {
 
     // Find the index of the closest value in the slider.
     let idx = 0;
-    for (; idx < attrs.values.length && attrs.values[idx] < val; idx++) {
-    }
+    for (; idx < attrs.values.length && attrs.values[idx] < val; idx++) {}
 
     let spinnerCfg = {};
     if (attrs.isTime) {
       spinnerCfg = {
         type: 'text',
-        pattern: '(0[0-9]|1[0-9]|2[0-3])(:[0-5][0-9]){2}',  // hh:mm:ss
+        pattern: '(0[0-9]|1[0-9]|2[0-3])(:[0-5][0-9]){2}', // hh:mm:ss
         value: new Date(val).toISOString().substr(11, 8),
         oninput: (e: InputEvent) => {
           this.onTimeValueChange(attrs, (e.target as HTMLInputElement).value);
@@ -221,18 +228,19 @@ export class Slider implements m.ClassComponent<SliderAttrs> {
       };
     }
     return m(
-        '.slider' + (attrs.cssClass || ''),
-        m('header', attrs.title),
-        description ? m('header.descr', attrs.description) : '',
-        attrs.icon !== undefined ? m('i.material-icons', attrs.icon) : [],
-        m(`input[id="${id}"][type=range][min=0][max=${maxIdx}][value=${idx}]`, {
-          disabled,
-          oninput: (e: InputEvent) => {
-            this.onSliderChange(attrs, +(e.target as HTMLInputElement).value);
-          },
-        }),
-        m(`input.spinner[min=${min}][for=${id}]`, spinnerCfg),
-        m('.unit', attrs.unit));
+      '.slider' + (attrs.cssClass ?? ''),
+      m('header', attrs.title),
+      description ? m('header.descr', attrs.description) : '',
+      attrs.icon !== undefined ? m('i.material-icons', attrs.icon) : [],
+      m(`input[id="${id}"][type=range][min=0][max=${maxIdx}][value=${idx}]`, {
+        disabled,
+        oninput: (e: InputEvent) => {
+          this.onSliderChange(attrs, +(e.target as HTMLInputElement).value);
+        },
+      }),
+      m(`input.spinner[min=${min}][for=${id}]`, spinnerCfg),
+      m('.unit', attrs.unit),
+    );
   }
 }
 
@@ -241,6 +249,7 @@ export class Slider implements m.ClassComponent<SliderAttrs> {
 // +---------------------------------------------------------------------------+
 
 export interface DropdownAttrs {
+  recCfg: RecordConfig;
   title: string;
   cssClass?: string;
   options: Map<string, string>;
@@ -266,15 +275,13 @@ export class Dropdown implements m.ClassComponent<DropdownAttrs> {
       const item = assertExists(dom.selectedOptions.item(i));
       selKeys.push(item.value);
     }
-    const traceCfg = produce(globals.state.recordConfig, (draft) => {
-      attrs.set(draft, selKeys);
-    });
-    globals.dispatch(Actions.setRecordConfig({config: traceCfg}));
+    attrs.set(attrs.recCfg, selKeys);
+    raf.scheduleFullRedraw();
   }
 
   view({attrs}: m.CVnode<DropdownAttrs>) {
     const options: m.Children = [];
-    const selItems = attrs.get(globals.state.recordConfig);
+    const selItems = attrs.get(attrs.recCfg);
     let numSelected = 0;
     const entries = [...attrs.options.entries()];
     const f = attrs.sort === undefined ? defaultSort : attrs.sort;
@@ -289,24 +296,25 @@ export class Dropdown implements m.ClassComponent<DropdownAttrs> {
     }
     const label = `${attrs.title} ${numSelected ? `(${numSelected})` : ''}`;
     return m(
-        `select.dropdown${attrs.cssClass || ''}[multiple=multiple]`,
-        {
-          onblur: (e: Event) => this.resetScroll(e.target as HTMLSelectElement),
-          onmouseleave: (e: Event) =>
-              this.resetScroll(e.target as HTMLSelectElement),
-          oninput: (e: Event) => this.onChange(attrs, e),
-          oncreate: (vnode) => this.resetScroll(vnode.dom as HTMLSelectElement),
-        },
-        m('optgroup', {label}, options));
+      `select.dropdown${attrs.cssClass ?? ''}[multiple=multiple]`,
+      {
+        onblur: (e: Event) => this.resetScroll(e.target as HTMLSelectElement),
+        onmouseleave: (e: Event) =>
+          this.resetScroll(e.target as HTMLSelectElement),
+        oninput: (e: Event) => this.onChange(attrs, e),
+        oncreate: (vnode) => this.resetScroll(vnode.dom as HTMLSelectElement),
+      },
+      m('optgroup', {label}, options),
+    );
   }
 }
-
 
 // +---------------------------------------------------------------------------+
 // | Textarea: wrapper around <textarea>.                                      |
 // +---------------------------------------------------------------------------+
 
 export interface TextareaAttrs {
+  recCfg: RecordConfig;
   placeholder: string;
   docsLink?: string;
   cssClass?: string;
@@ -317,24 +325,25 @@ export interface TextareaAttrs {
 
 export class Textarea implements m.ClassComponent<TextareaAttrs> {
   onChange(attrs: TextareaAttrs, dom: HTMLTextAreaElement) {
-    const traceCfg = produce(globals.state.recordConfig, (draft) => {
-      attrs.set(draft, dom.value);
-    });
-    globals.dispatch(Actions.setRecordConfig({config: traceCfg}));
+    attrs.set(attrs.recCfg, dom.value);
+    raf.scheduleFullRedraw();
   }
 
   view({attrs}: m.CVnode<TextareaAttrs>) {
     return m(
-        '.textarea-holder',
-        m('header',
-          attrs.title,
-          attrs.docsLink && [' ', m(DocsChip, {href: attrs.docsLink})]),
-        m(`textarea.extra-input${attrs.cssClass || ''}`, {
-          onchange: (e: Event) =>
-              this.onChange(attrs, e.target as HTMLTextAreaElement),
-          placeholder: attrs.placeholder,
-          value: attrs.get(globals.state.recordConfig),
-        }));
+      '.textarea-holder',
+      m(
+        'header',
+        attrs.title,
+        attrs.docsLink && [' ', m(DocsChip, {href: attrs.docsLink})],
+      ),
+      m(`textarea.extra-input${attrs.cssClass ?? ''}`, {
+        onchange: (e: Event) =>
+          this.onChange(attrs, e.target as HTMLTextAreaElement),
+        placeholder: attrs.placeholder,
+        value: attrs.get(attrs.recCfg),
+      }),
+    );
   }
 }
 
@@ -350,85 +359,98 @@ export interface CodeSnippetAttrs {
 export class CodeSnippet implements m.ClassComponent<CodeSnippetAttrs> {
   view({attrs}: m.CVnode<CodeSnippetAttrs>) {
     return m(
-        '.code-snippet',
-        m('button',
-          {
-            title: 'Copy to clipboard',
-            onclick: () => copyToClipboard(attrs.text),
-          },
-          m('i.material-icons', 'assignment')),
-        m('code', attrs.text),
+      '.code-snippet',
+      m(
+        'button',
+        {
+          title: 'Copy to clipboard',
+          onclick: () => copyToClipboard(attrs.text),
+        },
+        m('i.material-icons', 'assignment'),
+      ),
+      m('code', attrs.text),
     );
   }
 }
 
-
-interface CategoriesCheckboxListParams {
-  categories: Map<string, string>;
-  title: string;
+export interface CategoryGetter {
   get: Getter<string[]>;
   set: Setter<string[]>;
 }
 
-export class CategoriesCheckboxList implements
-    m.ClassComponent<CategoriesCheckboxListParams> {
+type CategoriesCheckboxListParams = CategoryGetter & {
+  recCfg: RecordConfig;
+  categories: Map<string, string>;
+  title: string;
+};
+
+export class CategoriesCheckboxList
+  implements m.ClassComponent<CategoriesCheckboxListParams>
+{
   updateValue(
-      attrs: CategoriesCheckboxListParams, value: string, enabled: boolean) {
-    const traceCfg = produce(globals.state.recordConfig, (draft) => {
-      const values = attrs.get(draft);
-      const index = values.indexOf(value);
-      if (enabled && index === -1) {
-        values.push(value);
-      }
-      if (!enabled && index !== -1) {
-        values.splice(index, 1);
-      }
-    });
-    globals.dispatch(Actions.setRecordConfig({config: traceCfg}));
+    attrs: CategoriesCheckboxListParams,
+    value: string,
+    enabled: boolean,
+  ) {
+    const values = attrs.get(attrs.recCfg);
+    const index = values.indexOf(value);
+    if (enabled && index === -1) {
+      values.push(value);
+    }
+    if (!enabled && index !== -1) {
+      values.splice(index, 1);
+    }
+    raf.scheduleFullRedraw();
   }
 
   view({attrs}: m.CVnode<CategoriesCheckboxListParams>) {
-    const enabled = new Set(attrs.get(globals.state.recordConfig));
+    const enabled = new Set(attrs.get(attrs.recCfg));
     return m(
-        '.categories-list',
-        m('h3',
-          attrs.title,
-          m('button.config-button',
-            {
-              onclick: () => {
-                const config = produce(globals.state.recordConfig, (draft) => {
-                  attrs.set(draft, Array.from(attrs.categories.keys()));
-                });
-                globals.dispatch(Actions.setRecordConfig({config}));
-              },
+      '.categories-list',
+      m(
+        'h3',
+        attrs.title,
+        m(
+          'button.config-button',
+          {
+            onclick: () => {
+              attrs.set(attrs.recCfg, Array.from(attrs.categories.keys()));
             },
-            'All'),
-          m('button.config-button',
-            {
-              onclick: () => {
-                const config = produce(globals.state.recordConfig, (draft) => {
-                  attrs.set(draft, []);
-                });
-                globals.dispatch(Actions.setRecordConfig({config}));
-              },
+          },
+          'All',
+        ),
+        m(
+          'button.config-button',
+          {
+            onclick: () => {
+              attrs.set(attrs.recCfg, []);
             },
-            'None')),
-        m('ul.checkboxes',
-          Array.from(attrs.categories.entries()).map(([key, value]) => {
-            const id = `category-checkbox-${key}`;
-            return m(
-                'label',
-                {'for': id},
-                m('li',
-                  m('input[type=checkbox]', {
-                    id,
-                    checked: enabled.has(key),
-                    onclick: (e: InputEvent) => {
-                      const target = e.target as HTMLInputElement;
-                      this.updateValue(attrs, key, target.checked);
-                    },
-                  }),
-                  value));
-          })));
+          },
+          'None',
+        ),
+      ),
+      m(
+        'ul.checkboxes',
+        Array.from(attrs.categories.entries()).map(([key, value]) => {
+          const id = `category-checkbox-${key}`;
+          return m(
+            'label',
+            {for: id},
+            m(
+              'li',
+              m('input[type=checkbox]', {
+                id,
+                checked: enabled.has(key),
+                onclick: (e: InputEvent) => {
+                  const target = e.target as HTMLInputElement;
+                  this.updateValue(attrs, key, target.checked);
+                },
+              }),
+              value,
+            ),
+          );
+        }),
+      ),
+    );
   }
 }

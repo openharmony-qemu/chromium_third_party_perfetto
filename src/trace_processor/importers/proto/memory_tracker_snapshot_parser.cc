@@ -20,6 +20,7 @@
 #include "protos/perfetto/trace/memory_graph.pbzero.h"
 #include "src/trace_processor/containers/string_pool.h"
 #include "src/trace_processor/importers/common/args_tracker.h"
+#include "src/trace_processor/importers/common/track_tracker.h"
 #include "src/trace_processor/tables/memory_tables_py.h"
 
 namespace perfetto {
@@ -169,8 +170,13 @@ void MemoryTrackerSnapshotParser::EmitRows(int64_t ts,
 
   // For now, we use the existing global instant event track for chrome events,
   // since memory dumps are global.
-  TrackId track_id =
-      context_->track_tracker->GetOrCreateLegacyChromeGlobalInstantTrack();
+  TrackId track_id = context_->track_tracker->InternGlobalTrack(
+      tracks::legacy_chrome_global_instants, TrackTracker::AutoName(),
+      [this](ArgsTracker::BoundInserter& inserter) {
+        inserter.AddArg(
+            context_->storage->InternString("source"),
+            Variadic::String(context_->storage->InternString("chrome")));
+      });
 
   tables::MemorySnapshotTable::Row snapshot_row(
       ts, track_id, level_of_detail_ids_[static_cast<size_t>(level_of_detail)]);
@@ -275,8 +281,7 @@ MemoryTrackerSnapshotParser::EmitNode(
           .id;
 
   auto* node_table = context_->storage->mutable_memory_snapshot_node_table();
-  uint32_t node_row_index =
-      static_cast<uint32_t>(*node_table->id().IndexOf(node_row_id));
+  auto rr = *node_table->FindById(node_row_id);
   ArgsTracker::BoundInserter args =
       context_->args_tracker->AddArgsTo(node_row_id);
 
@@ -286,9 +291,9 @@ MemoryTrackerSnapshotParser::EmitNode(
         int64_t value_int = static_cast<int64_t>(entry.second.value_uint64);
 
         if (entry.first == "size") {
-          node_table->mutable_size()->Set(node_row_index, value_int);
+          rr.set_size(value_int);
         } else if (entry.first == "effective_size") {
-          node_table->mutable_effective_size()->Set(node_row_index, value_int);
+          rr.set_effective_size(value_int);
         } else {
           args.AddArg(context_->storage->InternString(
                           base::StringView(entry.first + ".value")),

@@ -38,14 +38,33 @@ import "protos/perfetto/trace_processor/metatrace_categories.proto";
 
 enum TraceProcessorApiVersion {
   // This variable has been introduced in v15 and is used to deal with API
-  // mismatches between UI and trace_processor_shell --httpd. Increment this
-  // every time a new feature that the UI depends on is being introduced (e.g.
-  // new tables, new SQL operators, metrics that are required by the UI).
+  // mismatches between UI and trace_processor_shell --httpd.
+  //
+  // Prior to API version 11 this was incremented every time a new
+  // feature that the UI depended on was introduced (e.g. new tables,
+  // new SQL operators, metrics that are required by the UI, etc).
+  // This:
+  // a. Tended to be forgotten
+  // b. Still led to issues when the TP dropped *backwards*
+  //    compatibility of a feature (since we checked TP >= UI
+  //    TRACE_PROCESSOR_CURRENT_API_VERSION).
+  // Now the UI attempts to redirect the user to the matched version
+  // of the UI if one exists.
   // See also StatusResult.api_version (below).
-  TRACE_PROCESSOR_CURRENT_API_VERSION = 6;
+  // Changes:
+  // 7. Introduce GUESS_CPU_SIZE
+  // 8. Add 'json' option to ComputeMetricArgs
+  // 9. Add get_thread_state_summary_for_interval.
+  // 10. Add 'slice_is_ancestor' to stdlib.
+  // 11. Removal of experimental module from stdlib.
+  // 12. Changed UI to be more aggresive about version matching.
+  //     Added version_code.
+  // 13. Added TPM_REGISTER_SQL_MODULE method.
+  // 14. Added parsing mode option to RESET method.
+  TRACE_PROCESSOR_CURRENT_API_VERSION = 14;
 }
 
-// At lowest level, the wire-format of the RPC procol is a linear sequence of
+// At lowest level, the wire-format of the RPC protocol is a linear sequence of
 // TraceProcessorRpc messages on each side of the byte pipe
 // Each message is prefixed by a tag (field = 1, type = length delimited) and a
 // varint encoding its size (this is so the whole stream can also be read /
@@ -70,13 +89,15 @@ message TraceProcessorRpc {
   optional string fatal_error = 5;
 
   enum TraceProcessorMethod {
+    reserved 4, 12;
+    reserved "TPM_QUERY_RAW_DEPRECATED";
+    reserved "TPM_REGISTER_SQL_MODULE";
+
     TPM_UNSPECIFIED = 0;
     TPM_APPEND_TRACE_DATA = 1;
     TPM_FINALIZE_TRACE_DATA = 2;
     TPM_QUERY_STREAMING = 3;
     // Previously: TPM_QUERY_RAW_DEPRECATED
-    reserved 4;
-    reserved "TPM_QUERY_RAW_DEPRECATED";
     TPM_COMPUTE_METRIC = 5;
     TPM_GET_METRIC_DESCRIPTORS = 6;
     TPM_RESTORE_INITIAL_TABLES = 7;
@@ -84,6 +105,7 @@ message TraceProcessorRpc {
     TPM_DISABLE_AND_READ_METATRACE = 9;
     TPM_GET_STATUS = 10;
     TPM_RESET_TRACE_PROCESSOR = 11;
+    TPM_REGISTER_SQL_PACKAGE = 13;
   }
 
   oneof type {
@@ -115,6 +137,8 @@ message TraceProcessorRpc {
     EnableMetatraceArgs enable_metatrace_args = 106;
     // For TPM_RESET_TRACE_PROCESSOR.
     ResetTraceProcessorArgs reset_trace_processor_args = 107;
+    // For TPM_REGISTER_SQL_PACKAGE.
+    RegisterSqlPackageArgs register_sql_package_args = 108;
 
     // TraceProcessorMethod response args.
     // For TPM_APPEND_TRACE_DATA.
@@ -129,6 +153,8 @@ message TraceProcessorRpc {
     DisableAndReadMetatraceResult metatrace = 209;
     // For TPM_GET_STATUS.
     StatusResult status = 210;
+    // For TPM_REGISTER_SQL_PACKAGE.
+    RegisterSqlPackageResult register_sql_package_result = 211;
   }
 
   // Previously: RawQueryArgs for TPM_QUERY_RAW_DEPRECATED
@@ -207,6 +233,9 @@ message QueryResult {
 
   // The number of statements which produced output rows in the provided SQL.
   optional uint32 statement_with_output_count = 5;
+
+  // The last statement in the provided SQL.
+  optional string last_statement_sql = 6;
 }
 
 // Input for the /status endpoint.
@@ -227,6 +256,15 @@ message StatusResult {
   // The API version is incremented every time a change that the UI depends
   // on is introduced (e.g. adding a new table that the UI queries).
   optional int32 api_version = 3;
+
+  // Typically something like "v42.1-deadbeef0", but could be just
+  // "v42", "v0.0", or unset for binaries built from Bazel or other
+  // build configurations. This can be compared with equality to other
+  // version codes to detect matched builds (for example to see if
+  // trace_processor_shell and the UI were built at the same revision)
+  // but you should not attempt to parse it as the format may change
+  // without warning.
+  optional string version_code = 4;
 }
 
 // Input for the /compute_metric endpoint.
@@ -234,6 +272,7 @@ message ComputeMetricArgs {
   enum ResultFormat {
     BINARY_PROTOBUF = 0;
     TEXTPROTO = 1;
+    JSON = 2;
   }
   repeated string metric_names = 1;
   optional ResultFormat format = 2;
@@ -251,6 +290,9 @@ message ComputeMetricResult {
 
     // A perfetto.protos.TraceMetrics formatted as prototext.
     string metrics_as_prototext = 3;
+
+    // A perfetto.protos.TraceMetrics formatted as json.
+    string metrics_as_json = 4;
   }
 
   optional string error = 2;
@@ -289,8 +331,29 @@ message ResetTraceProcessorArgs {
     NO_DROP = 0;
     TRACK_EVENT_RANGE_OF_INTEREST = 1;
   }
+  enum ParsingMode {
+    DEFAULT = 0;
+    TOKENIZE_ONLY = 1;
+    TOKENIZE_AND_SORT = 2;
+  }
   // Mirror of the corresponding perfetto::trace_processor::Config fields.
   optional DropTrackEventDataBefore drop_track_event_data_before = 1;
   optional bool ingest_ftrace_in_raw_table = 2;
   optional bool analyze_trace_proto_content = 3;
+  optional bool ftrace_drop_until_all_cpus_valid = 4;
+  optional ParsingMode parsing_mode = 5;
+}
+
+message RegisterSqlPackageArgs {
+  message Module {
+    optional string name = 1;
+    optional string sql = 2;
+  }
+  optional string package_name = 1;
+  repeated Module modules = 2;
+  optional bool allow_override = 3;
+}
+
+message RegisterSqlPackageResult {
+  optional string error = 1;
 }

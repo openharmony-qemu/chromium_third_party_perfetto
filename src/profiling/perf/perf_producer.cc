@@ -16,8 +16,10 @@
 
 #include "src/profiling/perf/perf_producer.h"
 
+#include <optional>
 #include <random>
 #include <utility>
+#include <vector>
 
 #include <unistd.h>
 
@@ -26,7 +28,9 @@
 
 #include "perfetto/base/logging.h"
 #include "perfetto/base/task_runner.h"
+#include "perfetto/ext/base/file_utils.h"
 #include "perfetto/ext/base/metatrace.h"
+#include "perfetto/ext/base/string_utils.h"
 #include "perfetto/ext/base/utils.h"
 #include "perfetto/ext/base/weak_ptr.h"
 #include "perfetto/ext/tracing/core/basic_types.h"
@@ -80,6 +84,35 @@ size_t NumberOfCpus() {
   return static_cast<size_t>(sysconf(_SC_NPROCESSORS_CONF));
 }
 
+std::vector<uint32_t> GetOnlineCpus() {
+  size_t cpu_count = NumberOfCpus();
+  if (cpu_count == 0) {
+    return {};
+  }
+
+  static constexpr char kOnlineValue[] = "1\n";
+  std::vector<uint32_t> online_cpus;
+  online_cpus.reserve(cpu_count);
+  for (uint32_t cpu = 0; cpu < cpu_count; ++cpu) {
+    std::string res;
+    base::StackString<1024> path("/sys/devices/system/cpu/cpu%u/online", cpu);
+    if (!base::ReadFile(path.c_str(), &res)) {
+      // Always consider CPU 0 to be online if the "online" file does not exist
+      // for it. There seem to be several assumptions in the kernel which make
+      // CPU 0 special so this is a pretty safe bet.
+      if (cpu != 0) {
+        return {};
+      }
+      res = kOnlineValue;
+    }
+    if (res != kOnlineValue) {
+      continue;
+    }
+    online_cpus.push_back(cpu);
+  }
+  return online_cpus;
+}
+
 int32_t ToBuiltinClock(int32_t clockid) {
   switch (clockid) {
     case CLOCK_REALTIME:
@@ -130,7 +163,7 @@ void WritePerfEventDefaultsPacket(const EventConfig& event_config,
     timebase_pb->set_period(perf_attr->sample_period);
   }
 
-  // event:
+  // timebase event:
   const PerfCounter& timebase = event_config.timebase_event();
   switch (timebase.event_type()) {
     case PerfCounter::Type::kBuiltinCounter: {
@@ -157,6 +190,34 @@ void WritePerfEventDefaultsPacket(const EventConfig& event_config,
   // optional name to identify the counter during parsing:
   if (!timebase.name.empty()) {
     timebase_pb->set_name(timebase.name);
+  }
+
+  // follower events:
+  for (const auto& e : event_config.follower_events()) {
+    auto* followers_pb = perf_defaults->add_followers();
+    followers_pb->set_name(e.name);
+
+    switch (e.event_type()) {
+      case PerfCounter::Type::kBuiltinCounter: {
+        followers_pb->set_counter(
+            static_cast<protos::pbzero::PerfEvents::Counter>(e.counter));
+        break;
+      }
+      case PerfCounter::Type::kTracepoint: {
+        auto* tracepoint_pb = followers_pb->set_tracepoint();
+        tracepoint_pb->set_name(e.tracepoint_name);
+        tracepoint_pb->set_filter(e.tracepoint_filter);
+        break;
+      }
+      case PerfCounter::Type::kRawEvent: {
+        auto* raw_pb = followers_pb->set_raw_event();
+        raw_pb->set_type(e.attr_type);
+        raw_pb->set_config(e.attr_config);
+        raw_pb->set_config1(e.attr_config1);
+        raw_pb->set_config2(e.attr_config2);
+        break;
+      }
+    }
   }
 
   // Not setting timebase.timestamp_clock since the field that matters during
@@ -394,9 +455,14 @@ void PerfProducer::StartDataSource(DataSourceInstanceID ds_id,
     return;
   }
 
-  size_t num_cpus = NumberOfCpus();
+  std::vector<uint32_t> online_cpus = GetOnlineCpus();
+  if (online_cpus.empty()) {
+    PERFETTO_ELOG("No online CPUs found.");
+    return;
+  }
+
   std::vector<EventReader> per_cpu_readers;
-  for (uint32_t cpu = 0; cpu < num_cpus; cpu++) {
+  for (uint32_t cpu : online_cpus) {
     std::optional<EventReader> event_reader =
         EventReader::ConfigureEvents(cpu, event_config.value());
     if (!event_reader.has_value()) {
@@ -434,8 +500,12 @@ void PerfProducer::StartDataSource(DataSourceInstanceID ds_id,
 
   // Inform unwinder of the new data source instance, and optionally start a
   // periodic task to clear its cached state.
-  unwinding_worker_->PostStartDataSource(ds_id,
-                                         ds.event_config.kernel_frames());
+  auto unwind_mode = (ds.event_config.unwind_mode() ==
+                      protos::gen::PerfEventConfig::UNWIND_FRAME_POINTER)
+                         ? Unwinder::UnwindMode::kFramePointer
+                         : Unwinder::UnwindMode::kUnwindStack;
+  unwinding_worker_->PostStartDataSource(ds_id, ds.event_config.kernel_frames(),
+                                         unwind_mode);
   if (ds.event_config.unwind_state_clear_period_ms()) {
     unwinding_worker_->PostClearCachedStatePeriodic(
         ds_id, ds.event_config.unwind_state_clear_period_ms());
@@ -523,7 +593,8 @@ void PerfProducer::StopDataSource(DataSourceInstanceID ds_id) {
 // the SMB.
 void PerfProducer::Flush(FlushRequestID flush_id,
                          const DataSourceInstanceID* data_source_ids,
-                         size_t num_data_sources) {
+                         size_t num_data_sources,
+                         FlushFlags) {
   // Flush metatracing if requested.
   for (size_t i = 0; i < num_data_sources; i++) {
     auto ds_id = data_source_ids[i];
@@ -908,6 +979,11 @@ void PerfProducer::EmitSample(DataSourceInstanceID ds_id,
   perf_sample->set_tid(static_cast<uint32_t>(sample.common.tid));
   perf_sample->set_cpu_mode(ToCpuModeEnum(sample.common.cpu_mode));
   perf_sample->set_timebase_count(sample.common.timebase_count);
+
+  for (size_t i = 0; i < sample.common.follower_counts.size(); ++i) {
+    perf_sample->add_follower_counts(sample.common.follower_counts[i]);
+  }
+
   perf_sample->set_callstack_iid(callstack_iid);
   if (sample.unwind_error != unwindstack::ERROR_NONE) {
     perf_sample->set_unwind_error(ToProtoEnum(sample.unwind_error));
@@ -976,6 +1052,10 @@ void PerfProducer::EmitSkippedSample(DataSourceInstanceID ds_id,
   perf_sample->set_tid(static_cast<uint32_t>(sample.common.tid));
   perf_sample->set_cpu_mode(ToCpuModeEnum(sample.common.cpu_mode));
   perf_sample->set_timebase_count(sample.common.timebase_count);
+
+  for (size_t i = 0; i < sample.common.follower_counts.size(); ++i) {
+    perf_sample->add_follower_counts(sample.common.follower_counts[i]);
+  }
 
   using PerfSample = protos::pbzero::PerfSample;
   switch (reason) {

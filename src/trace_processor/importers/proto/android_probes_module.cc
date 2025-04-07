@@ -19,10 +19,11 @@
 #include "perfetto/base/build_config.h"
 #include "perfetto/ext/base/string_writer.h"
 #include "perfetto/protozero/scattered_heap_buffer.h"
+#include "src/trace_processor/importers/common/machine_tracker.h"
 #include "src/trace_processor/importers/common/track_tracker.h"
 #include "src/trace_processor/importers/proto/android_probes_parser.h"
 #include "src/trace_processor/importers/proto/android_probes_tracker.h"
-#include "src/trace_processor/importers/proto/packet_sequence_state.h"
+#include "src/trace_processor/importers/proto/packet_sequence_state_generation.h"
 #include "src/trace_processor/sorter/trace_sorter.h"
 
 #include "protos/perfetto/common/android_energy_consumer_descriptor.pbzero.h"
@@ -46,7 +47,7 @@ const char* MapToFriendlyPowerRailName(base::StringView raw) {
     return "cpu.big";
   } else if (raw == "S5M_VDD_INT") {
     return "system.fabric";
-  } else if (raw == "S10M_VDD_TPU") {
+  } else if (raw == "S10M_VDD_TPU" || raw == "S7M_VDD_TPU") {
     return "tpu";
   } else if (raw == "PPVAR_VSYS_PWR_DISP" || raw == "VSYS_PWR_DISPLAY") {
     return "display";
@@ -103,7 +104,7 @@ ModuleResult AndroidProbesModule::TokenizePacket(
     const protos::pbzero::TracePacket_Decoder&,
     TraceBlobView* packet,
     int64_t packet_timestamp,
-    PacketSequenceState* state,
+    RefPtr<PacketSequenceStateGeneration> state,
     uint32_t field_id) {
   protos::pbzero::TracePacket::Decoder decoder(packet->data(),
                                                packet->length());
@@ -154,8 +155,9 @@ ModuleResult AndroidProbesModule::TokenizePacket(
     }
     StringId counter_name_id =
         context_->storage->InternString(counter_name.string_view());
-    TrackId track = context_->track_tracker->InternGlobalCounterTrack(
-        counter_name_id, [this, &desc](ArgsTracker::BoundInserter& inserter) {
+    TrackId track = context_->track_tracker->LegacyInternGlobalCounterTrack(
+        TrackTracker::Group::kPower, counter_name_id,
+        [this, &desc](ArgsTracker::BoundInserter& inserter) {
           StringId raw_name = context_->storage->InternString(desc.rail_name());
           inserter.AddArg(power_rail_raw_name_id_, Variadic::String(raw_name));
 
@@ -180,7 +182,9 @@ ModuleResult AndroidProbesModule::TokenizePacket(
             : packet_timestamp;
 
     protozero::HeapBuffered<protos::pbzero::TracePacket> data_packet;
-    data_packet->set_timestamp(static_cast<uint64_t>(actual_ts));
+    // Keep the original timestamp to later extract as an arg; the sorter does
+    // not read this.
+    data_packet->set_timestamp(static_cast<uint64_t>(packet_timestamp));
 
     auto* energy = data_packet->set_power_rails()->add_energy_data();
     energy->set_energy(data.energy());
@@ -189,8 +193,9 @@ ModuleResult AndroidProbesModule::TokenizePacket(
 
     std::vector<uint8_t> vec = data_packet.SerializeAsArray();
     TraceBlob blob = TraceBlob::CopyFrom(vec.data(), vec.size());
-    context_->sorter->PushTracePacket(actual_ts, state->current_generation(),
-                                      TraceBlobView(std::move(blob)));
+    context_->sorter->PushTracePacket(actual_ts, state,
+                                      TraceBlobView(std::move(blob)),
+                                      context_->machine_id());
   }
 
   return ModuleResult::Handled();
@@ -206,7 +211,7 @@ void AndroidProbesModule::ParseTracePacketData(
       parser_.ParseBatteryCounters(ts, decoder.battery());
       return;
     case TracePacket::kPowerRailsFieldNumber:
-      parser_.ParsePowerRails(ts, decoder.power_rails());
+      parser_.ParsePowerRails(ts, decoder.timestamp(), decoder.power_rails());
       return;
     case TracePacket::kAndroidEnergyEstimationBreakdownFieldNumber:
       parser_.ParseEnergyBreakdown(

@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import {extractDurationFromTraceConfig} from '../base/trace_config_utils';
-import {extractTraceConfig} from '../base/trace_config_utils';
-import {isAdbTarget} from '../common/state';
-import {globals} from '../frontend/globals';
-
+import {exists} from '../base/utils';
+import {RecordingState, RecordingTarget, isAdbTarget} from '../common/state';
+import {
+  extractDurationFromTraceConfig,
+  extractTraceConfig,
+} from '../core/trace_config_utils';
 import {Adb} from './adb_interfaces';
 import {ReadBuffersResponse} from './consumer_port_types';
 import {Consumer, RpcConsumerPort} from './record_controller_interfaces';
@@ -25,7 +26,7 @@ export enum AdbConnectionState {
   READY_TO_CONNECT,
   AUTH_IN_PROGRESS,
   CONNECTED,
-  CLOSED
+  CLOSED,
 }
 
 interface Command {
@@ -42,10 +43,16 @@ export abstract class AdbBaseConsumerPort extends RpcConsumerPort {
   protected adb: Adb;
   protected state = AdbConnectionState.READY_TO_CONNECT;
   protected device?: USBDevice;
+  protected recState: RecordingState;
 
-  protected constructor(adb: Adb, consumer: Consumer) {
+  protected constructor(
+    adb: Adb,
+    consumer: Consumer,
+    recState: RecordingState,
+  ) {
     super(consumer);
     this.adb = adb;
+    this.recState = recState;
   }
 
   async handleCommand(method: string, params: Uint8Array) {
@@ -67,15 +74,20 @@ export abstract class AdbBaseConsumerPort extends RpcConsumerPort {
 
       this.commandQueue.push({method, params});
 
-      if (this.state === AdbConnectionState.READY_TO_CONNECT ||
-          this.deviceDisconnected()) {
+      if (
+        this.state === AdbConnectionState.READY_TO_CONNECT ||
+        this.deviceDisconnected()
+      ) {
         this.state = AdbConnectionState.AUTH_IN_PROGRESS;
-        this.device = await this.findDevice();
+        this.device = await this.findDevice(this.recState.recordingTarget);
         if (!this.device) {
           this.state = AdbConnectionState.READY_TO_CONNECT;
-          const target = globals.state.recordingTarget;
-          throw Error(`Device with serial ${
-              isAdbTarget(target) ? target.serial : 'n/a'} not found.`);
+          const target = this.recState.recordingTarget;
+          throw Error(
+            `Device with serial ${
+              isAdbTarget(target) ? target.serial : 'n/a'
+            } not found.`,
+          );
         }
 
         this.sendStatus(`Please allow USB debugging on device.
@@ -84,7 +96,7 @@ export abstract class AdbBaseConsumerPort extends RpcConsumerPort {
         await this.adb.connect(this.device);
 
         // During the authentication the device may have been disconnected.
-        if (!globals.state.recordingInProgress || this.deviceDisconnected()) {
+        if (!this.recState.recordingInProgress || this.deviceDisconnected()) {
           throw Error('Recording not in progress after adb authorization.');
         }
 
@@ -114,23 +126,29 @@ export abstract class AdbBaseConsumerPort extends RpcConsumerPort {
     const traceConfigProto = extractTraceConfig(enableTracingProto);
     if (!traceConfigProto) return;
     const duration = extractDurationFromTraceConfig(traceConfigProto);
-    this.sendStatus(`Recording in progress${
-        duration ? ' for ' + duration.toString() + ' ms' : ''}...`);
+    this.sendStatus(
+      `Recording in progress${
+        exists(duration) ? ' for ' + duration.toString() + ' ms' : ''
+      }...`,
+    );
   }
 
   abstract invoke(method: string, argsProto: Uint8Array): void;
 
-  generateChunkReadResponse(data: Uint8Array, last = false):
-      ReadBuffersResponse {
+  generateChunkReadResponse(
+    data: Uint8Array,
+    last = false,
+  ): ReadBuffersResponse {
     return {
       type: 'ReadBuffersResponse',
       slices: [{data, lastSliceForPacket: last}],
     };
   }
 
-  async findDevice(): Promise<USBDevice|undefined> {
+  async findDevice(
+    connectedDevice: RecordingTarget,
+  ): Promise<USBDevice | undefined> {
     if (!('usb' in navigator)) return undefined;
-    const connectedDevice = globals.state.recordingTarget;
     if (!isAdbTarget(connectedDevice)) return undefined;
     const devices = await navigator.usb.getDevices();
     return devices.find((d) => d.serialNumber === connectedDevice.serial);

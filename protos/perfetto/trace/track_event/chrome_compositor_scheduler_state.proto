@@ -62,7 +62,6 @@ message ChromeCompositorSchedulerState {
     DEADLINE_MODE_REGULAR = 3;
     DEADLINE_MODE_LATE = 4;
     DEADLINE_MODE_BLOCKED = 5;
-    DEADLINE_MODE_WAIT_FOR_SCROLL = 6;
   }
   optional ChromeCompositorStateMachine state_machine = 1;
   optional bool observing_begin_frame_source = 2;

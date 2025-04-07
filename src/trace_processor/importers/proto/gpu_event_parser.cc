@@ -17,33 +17,47 @@
 #include "src/trace_processor/importers/proto/gpu_event_parser.h"
 
 #include <cinttypes>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <optional>
+#include <string>
 
-#include "perfetto/ext/base/utils.h"
+#include "perfetto/base/logging.h"
+#include "perfetto/ext/base/string_utils.h"
+#include "perfetto/ext/base/string_view.h"
+#include "perfetto/ext/base/string_writer.h"
 #include "perfetto/protozero/field.h"
+#include "protos/perfetto/trace/android/gpu_mem_event.pbzero.h"
 #include "src/trace_processor/importers/common/args_tracker.h"
 #include "src/trace_processor/importers/common/event_tracker.h"
 #include "src/trace_processor/importers/common/process_tracker.h"
 #include "src/trace_processor/importers/common/slice_tracker.h"
 #include "src/trace_processor/importers/common/track_tracker.h"
+#include "src/trace_processor/importers/proto/packet_sequence_state_generation.h"
+#include "src/trace_processor/importers/proto/vulkan_memory_tracker.h"
+#include "src/trace_processor/storage/stats.h"
 #include "src/trace_processor/storage/trace_storage.h"
+#include "src/trace_processor/tables/profiler_tables_py.h"
+#include "src/trace_processor/tables/slice_tables_py.h"
+#include "src/trace_processor/tables/track_tables_py.h"
 #include "src/trace_processor/types/trace_processor_context.h"
 
 #include "protos/perfetto/common/gpu_counter_descriptor.pbzero.h"
-#include "protos/perfetto/trace/android/graphics_frame_event.pbzero.h"
 #include "protos/perfetto/trace/gpu/gpu_counter_event.pbzero.h"
 #include "protos/perfetto/trace/gpu/gpu_log.pbzero.h"
 #include "protos/perfetto/trace/gpu/gpu_render_stage_event.pbzero.h"
 #include "protos/perfetto/trace/gpu/vulkan_api_event.pbzero.h"
 #include "protos/perfetto/trace/gpu/vulkan_memory_event.pbzero.h"
 #include "protos/perfetto/trace/interned_data/interned_data.pbzero.h"
+#include "src/trace_processor/types/variadic.h"
 
-namespace perfetto {
-namespace trace_processor {
+namespace perfetto::trace_processor {
 
 namespace {
 
 // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkObjectType.html
-typedef enum VkObjectType {
+enum VkObjectType {
   VK_OBJECT_TYPE_UNKNOWN = 0,
   VK_OBJECT_TYPE_INSTANCE = 1,
   VK_OBJECT_TYPE_PHYSICAL_DEVICE = 2,
@@ -88,7 +102,9 @@ typedef enum VkObjectType {
   VK_OBJECT_TYPE_SAMPLER_YCBCR_CONVERSION_KHR =
       VK_OBJECT_TYPE_SAMPLER_YCBCR_CONVERSION,
   VK_OBJECT_TYPE_MAX_ENUM = 0x7FFFFFFF
-} VkObjectType;
+};
+
+using protos::pbzero::VulkanMemoryEvent;
 
 }  // anonymous namespace
 
@@ -166,7 +182,7 @@ void GpuEventParser::ParseGpuCounterEvent(int64_t ts, ConstBytes blob) {
 
       auto name_id = context_->storage->InternString(name);
       auto desc_id = context_->storage->InternString(desc);
-      auto track_id = context_->track_tracker->CreateGpuCounterTrack(
+      auto track_id = context_->track_tracker->LegacyCreateGpuCounterTrack(
           name_id, 0 /* gpu_id */, desc_id, unit_id);
       gpu_counter_track_ids_.emplace(counter_id, track_id);
       if (spec.has_groups()) {
@@ -209,7 +225,7 @@ void GpuEventParser::ParseGpuCounterEvent(int64_t ts, ConstBytes blob) {
   }
 }
 
-const StringId GpuEventParser::GetFullStageName(
+StringId GpuEventParser::GetFullStageName(
     PacketSequenceStateGeneration* sequence_state,
     const protos::pbzero::GpuRenderStageEvent_Decoder& event) const {
   StringId stage_name;
@@ -223,8 +239,7 @@ const StringId GpuEventParser::GetFullStageName(
     }
     stage_name = context_->storage->InternString(decoder->name());
   } else {
-    uint64_t stage_id = static_cast<uint64_t>(event.stage_id());
-
+    auto stage_id = static_cast<uint64_t>(event.stage_id());
     if (stage_id < gpu_render_stage_ids_.size()) {
       stage_name = gpu_render_stage_ids_[static_cast<size_t>(stage_id)].first;
     } else {
@@ -250,12 +265,12 @@ void GpuEventParser::InsertGpuTrack(
     track.description = context_->storage->InternString(hw_queue.description());
     if (gpu_hw_queue_counter_ >= gpu_hw_queue_ids_.size()) {
       gpu_hw_queue_ids_.emplace_back(
-          context_->track_tracker->InternGpuTrack(track));
+          context_->track_tracker->LegacyInternGpuTrack(track));
     } else {
       // If a gpu_render_stage_event is received before the specification, it is
       // possible that the slot has already been allocated.
       gpu_hw_queue_ids_[gpu_hw_queue_counter_] =
-          context_->track_tracker->InternGpuTrack(track);
+          context_->track_tracker->LegacyInternGpuTrack(track);
     }
   } else {
     // If a gpu_render_stage_event is received before the specification, a track
@@ -263,14 +278,11 @@ void GpuEventParser::InsertGpuTrack(
     // description.
     auto track_id = gpu_hw_queue_ids_[gpu_hw_queue_counter_];
     if (track_id.has_value()) {
-      auto row = context_->storage->mutable_gpu_track_table()
-                     ->id()
-                     .IndexOf(track_id.value())
-                     .value();
-      context_->storage->mutable_gpu_track_table()->mutable_name()->Set(
-          row, track_name);
-      context_->storage->mutable_gpu_track_table()->mutable_description()->Set(
-          row, context_->storage->InternString(hw_queue.description()));
+      auto rr = *context_->storage->mutable_gpu_track_table()->FindById(
+          track_id.value());
+      rr.set_name(track_name);
+      rr.set_description(
+          context_->storage->InternString(hw_queue.description()));
     } else {
       tables::GpuTrackTable::Row track(track_name);
       track.scope = gpu_render_stage_scope_id_;
@@ -291,12 +303,11 @@ std::optional<std::string> GpuEventParser::FindDebugName(
   auto name = map->second.find(vk_handle);
   if (name == map->second.end()) {
     return std::nullopt;
-  } else {
-    return name->second;
   }
+  return name->second;
 }
 
-const StringId GpuEventParser::ParseRenderSubpasses(
+StringId GpuEventParser::ParseRenderSubpasses(
     const protos::pbzero::GpuRenderStageEvent_Decoder& event) const {
   if (!event.has_render_subpass_index_mask()) {
     return kNullStringId;
@@ -330,6 +341,7 @@ void GpuEventParser::ParseGpuRenderStageEvent(
     ConstBytes blob) {
   protos::pbzero::GpuRenderStageEvent::Decoder event(blob.data, blob.size);
 
+  int32_t pid = 0;
   if (event.has_specifications()) {
     protos::pbzero::GpuRenderStageEvent_Specifications::Decoder spec(
         event.specifications().data, event.specifications().size);
@@ -344,10 +356,27 @@ void GpuEventParser::ParseGpuRenderStageEvent(
       protos::pbzero::GpuRenderStageEvent_Specifications_Description::Decoder
           stage(*it);
       if (stage.has_name()) {
-        gpu_render_stage_ids_.emplace_back(std::make_pair(
+        gpu_render_stage_ids_.emplace_back(
             context_->storage->InternString(stage.name()),
-            context_->storage->InternString(stage.description())));
+            context_->storage->InternString(stage.description()));
       }
+    }
+    if (spec.has_context_spec()) {
+      protos::pbzero::GpuRenderStageEvent_Specifications_ContextSpec::Decoder
+          context_spec(spec.context_spec());
+      if (context_spec.has_pid()) {
+        pid = context_spec.pid();
+      }
+    }
+  }
+
+  if (event.has_context()) {
+    uint64_t context_id = event.context();
+    auto* decoder = sequence_state->LookupInternedMessage<
+        protos::pbzero::InternedData::kGraphicsContextsFieldNumber,
+        protos::pbzero::InternedGraphicsContext>(context_id);
+    if (decoder) {
+      pid = decoder->pid();
     }
   }
 
@@ -400,7 +429,7 @@ void GpuEventParser::ParseGpuRenderStageEvent(
       track.scope = gpu_render_stage_scope_id_;
       track.description =
           context_->storage->InternString(decoder->description());
-      track_id = context_->track_tracker->InternGpuTrack(track);
+      track_id = context_->track_tracker->LegacyInternGpuTrack(track);
     } else {
       uint32_t id = static_cast<uint32_t>(event.hw_queue_id());
       if (id < gpu_hw_queue_ids_.size() && gpu_hw_queue_ids_[id].has_value()) {
@@ -425,7 +454,7 @@ void GpuEventParser::ParseGpuRenderStageEvent(
             context_->storage->InternString(writer.GetStringView());
         tables::GpuTrackTable::Row track(track_name);
         track.scope = gpu_render_stage_scope_id_;
-        track_id = context_->track_tracker->InternGpuTrack(track);
+        track_id = context_->track_tracker->LegacyInternGpuTrack(track);
         gpu_hw_queue_ids_.resize(id + 1);
         gpu_hw_queue_ids_[id] = track_id;
       }
@@ -468,7 +497,8 @@ void GpuEventParser::ParseGpuRenderStageEvent(
     row.command_buffer_name = command_buffer_name_id;
     row.submission_id = event.submission_id();
     row.hw_queue_id = static_cast<int64_t>(hw_queue_id);
-
+    row.upid = context_->process_tracker->GetOrCreateProcess(
+        static_cast<uint32_t>(pid));
     context_->slice_tracker->ScopedTyped(
         context_->storage->mutable_gpu_slice_table(), row, args_callback);
   }
@@ -504,8 +534,8 @@ void GpuEventParser::UpdateVulkanMemoryAllocationCounters(
       }
       track_str_id = vulkan_memory_tracker_.FindAllocationScopeCounterString(
           allocation_scope);
-      track = context_->track_tracker->InternProcessCounterTrack(track_str_id,
-                                                                 upid);
+      track = context_->track_tracker->LegacyInternProcessCounterTrack(
+          track_str_id, upid);
       context_->event_tracker->PushCounter(
           event.timestamp(),
           static_cast<double>(vulkan_driver_memory_counters_[allocation_scope]),
@@ -532,8 +562,8 @@ void GpuEventParser::UpdateVulkanMemoryAllocationCounters(
       track_str_id = vulkan_memory_tracker_.FindMemoryTypeCounterString(
           memory_type,
           VulkanMemoryTracker::DeviceCounterType::kAllocationCounter);
-      track = context_->track_tracker->InternProcessCounterTrack(track_str_id,
-                                                                 upid);
+      track = context_->track_tracker->LegacyInternProcessCounterTrack(
+          track_str_id, upid);
       context_->event_tracker->PushCounter(
           event.timestamp(),
           static_cast<double>(
@@ -561,8 +591,8 @@ void GpuEventParser::UpdateVulkanMemoryAllocationCounters(
       }
       track_str_id = vulkan_memory_tracker_.FindMemoryTypeCounterString(
           memory_type, VulkanMemoryTracker::DeviceCounterType::kBindCounter);
-      track = context_->track_tracker->InternProcessCounterTrack(track_str_id,
-                                                                 upid);
+      track = context_->track_tracker->LegacyInternProcessCounterTrack(
+          track_str_id, upid);
       context_->event_tracker->PushCounter(
           event.timestamp(),
           static_cast<double>(vulkan_device_memory_counters_bind_[memory_type]),
@@ -660,7 +690,7 @@ void GpuEventParser::ParseGpuLog(int64_t ts, ConstBytes blob) {
 
   tables::GpuTrackTable::Row track(gpu_log_track_name_id_);
   track.scope = gpu_log_scope_id_;
-  TrackId track_id = context_->track_tracker->InternGpuTrack(track);
+  TrackId track_id = context_->track_tracker->LegacyInternGpuTrack(track);
 
   auto args_callback = [this, &event](ArgsTracker::BoundInserter* inserter) {
     if (event.has_tag()) {
@@ -706,7 +736,7 @@ void GpuEventParser::ParseVulkanApiEvent(int64_t ts, ConstBytes blob) {
     // track so that they can appear close to the render stage slices.
     tables::GpuTrackTable::Row track(vk_event_track_id_);
     track.scope = vk_event_scope_id_;
-    TrackId track_id = context_->track_tracker->InternGpuTrack(track);
+    TrackId track_id = context_->track_tracker->LegacyInternGpuTrack(track);
     tables::GpuSliceTable::Row row;
     row.ts = ts;
     row.dur = static_cast<int64_t>(event.duration_ns());
@@ -734,14 +764,14 @@ void GpuEventParser::ParseGpuMemTotalEvent(int64_t ts, ConstBytes blob) {
   const uint32_t pid = gpu_mem_total.pid();
   if (pid == 0) {
     // Pid 0 is used to indicate the global total
-    track = context_->track_tracker->InternGlobalCounterTrack(
-        gpu_mem_total_name_id_, {}, gpu_mem_total_unit_id_,
-        gpu_mem_total_global_desc_id_);
+    track = context_->track_tracker->LegacyInternGlobalCounterTrack(
+        TrackTracker::Group::kMemory, gpu_mem_total_name_id_, {},
+        gpu_mem_total_unit_id_, gpu_mem_total_global_desc_id_);
   } else {
     // Process emitting the packet can be different from the pid in the event.
     UniqueTid utid = context_->process_tracker->UpdateThread(pid, pid);
-    UniquePid upid = context_->storage->thread_table().upid()[utid].value_or(0);
-    track = context_->track_tracker->InternProcessCounterTrack(
+    UniquePid upid = context_->storage->thread_table()[utid].upid().value_or(0);
+    track = context_->track_tracker->LegacyInternProcessCounterTrack(
         gpu_mem_total_name_id_, upid, gpu_mem_total_unit_id_,
         gpu_mem_total_proc_desc_id_);
   }
@@ -749,5 +779,4 @@ void GpuEventParser::ParseGpuMemTotalEvent(int64_t ts, ConstBytes blob) {
       ts, static_cast<double>(gpu_mem_total.size()), track);
 }
 
-}  // namespace trace_processor
-}  // namespace perfetto
+}  // namespace perfetto::trace_processor

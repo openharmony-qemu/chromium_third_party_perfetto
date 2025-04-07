@@ -23,28 +23,39 @@ namespace trace_processor {
 namespace sql_argument {
 
 bool IsValidName(base::StringView str) {
+  if (str.empty()) {
+    return false;
+  }
   auto pred = [](char c) { return !(isalnum(c) || c == '_'); };
   return std::find_if(str.begin(), str.end(), pred) == str.end();
 }
 
 std::optional<Type> ParseType(base::StringView str) {
-  if (str == "BOOL") {
+  if (str.CaseInsensitiveEq("bool")) {
     return Type::kBool;
-  } else if (str == "INT") {
+  }
+  if (str.CaseInsensitiveEq("int")) {
     return Type::kInt;
-  } else if (str == "UINT") {
+  }
+  if (str.CaseInsensitiveEq("uint")) {
     return Type::kUint;
-  } else if (str == "LONG") {
+  }
+  if (str.CaseInsensitiveEq("long")) {
     return Type::kLong;
-  } else if (str == "FLOAT") {
+  }
+  if (str.CaseInsensitiveEq("float")) {
     return Type::kFloat;
-  } else if (str == "DOUBLE") {
+  }
+  if (str.CaseInsensitiveEq("double")) {
     return Type::kDouble;
-  } else if (str == "STRING") {
+  }
+  if (str.CaseInsensitiveEq("string")) {
     return Type::kString;
-  } else if (str == "PROTO") {
+  }
+  if (str.CaseInsensitiveEq("proto")) {
     return Type::kProto;
-  } else if (str == "BYTES") {
+  }
+  if (str.CaseInsensitiveEq("bytes")) {
     return Type::kBytes;
   }
   return std::nullopt;
@@ -121,6 +132,21 @@ base::Status ParseArgumentDefinitions(const std::string& args,
     out.emplace_back("$" + arg_name, *opt_arg_type);
   }
   return base::OkStatus();
+}
+
+std::string SerializeArguments(const std::vector<ArgumentDefinition>& args) {
+  bool comma = false;
+  std::string serialized;
+  for (const auto& arg : args) {
+    if (comma) {
+      serialized.append(", ");
+    }
+    comma = true;
+    serialized.append(arg.name().c_str());
+    serialized.push_back(' ');
+    serialized.append(TypeToHumanFriendlyString(arg.type()));
+  }
+  return serialized;
 }
 
 }  // namespace sql_argument

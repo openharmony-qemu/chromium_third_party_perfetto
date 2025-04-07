@@ -11,9 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Contains tables for relevant for TODO."""
+"""Contains tables for relevant for slices."""
 
 from python.generators.trace_processor_table.public import Column as C
+from python.generators.trace_processor_table.public import ColumnDoc
 from python.generators.trace_processor_table.public import ColumnFlag
 from python.generators.trace_processor_table.public import CppInt32
 from python.generators.trace_processor_table.public import CppInt64
@@ -29,8 +30,9 @@ from python.generators.trace_processor_table.public import WrappingSqlView
 from src.trace_processor.tables.track_tables import TRACK_TABLE
 
 SLICE_TABLE = Table(
+    python_module=__file__,
     class_name='SliceTable',
-    sql_name='internal_slice',
+    sql_name='__intrinsic_slice',
     columns=[
         C('ts', CppInt64(), flags=ColumnFlag.SORTED),
         C('dur', CppInt64()),
@@ -49,92 +51,77 @@ SLICE_TABLE = Table(
     ],
     wrapping_sql_view=WrappingSqlView('slice'),
     tabledoc=TableDoc(
-        doc='''''',
-        group='Events',
-        columns={
-            'ts': '''timestamp of the start of the slice (in nanoseconds)''',
-            'dur': '''duration of the slice (in nanoseconds)''',
-            'arg_set_id': '''''',
-            'thread_instruction_count': '''to the end of the slice.''',
-            'thread_instruction_delta': '''The change in value from''',
-            'track_id': '''''',
-            'category': '''''',
-            'name': '''''',
-            'depth': '''''',
-            'stack_id': '''''',
-            'parent_stack_id': '''''',
-            'parent_id': '''''',
-            'thread_ts': '''''',
-            'thread_dur': ''''''
-        }))
-
-SCHED_SLICE_TABLE = Table(
-    class_name='SchedSliceTable',
-    sql_name='sched_slice',
-    columns=[
-        C('ts', CppInt64(), flags=ColumnFlag.SORTED),
-        C('dur', CppInt64()),
-        C('cpu', CppUint32()),
-        C('utid', CppUint32()),
-        C('end_state', CppString()),
-        C('priority', CppInt32()),
-    ],
-    tabledoc=TableDoc(
         doc='''
-          This table holds slices with kernel thread scheduling information.
-These slices are collected when the Linux "ftrace" data source is
-used with the "sched/switch" and "sched/wakeup*" events enabled.
+          Contains slices from userspace which explains what threads were doing
+          during the trace.
         ''',
         group='Events',
         columns={
             'ts':
-                '''The timestamp at the start of the slice (in nanoseconds).''',
+                'The timestamp at the start of the slice (in nanoseconds).',
             'dur':
-                '''The duration of the slice (in nanoseconds).''',
-            'utid':
-                '''The thread's unique id in the trace..''',
-            'cpu':
-                '''The CPU that the slice executed on.''',
-            'end_state':
-                '''A string representing the scheduling state of the
-kernel thread at the end of the slice.  The individual characters in
-the string mean the following: R (runnable), S (awaiting a wakeup),
-D (in an uninterruptible sleep), T (suspended), t (being traced),
-X (exiting), P (parked), W (waking), I (idle), N (not contributing
-to the load average), K (wakeable on fatal signals) and
-Z (zombie, awaiting cleanup).''',
-            'priority':
-                '''The kernel priority that the thread ran at.'''
-        }))
-
-THREAD_STATE_TABLE = Table(
-    class_name='ThreadStateTable',
-    sql_name='thread_state',
-    columns=[
-        C('utid', CppUint32()),
-        C('ts', CppInt64()),
-        C('dur', CppInt64()),
-        C('cpu', CppOptional(CppUint32())),
-        C('state', CppString()),
-        C('io_wait', CppOptional(CppUint32())),
-        C('blocked_function', CppOptional(CppString())),
-        C('waker_utid', CppOptional(CppUint32())),
-    ],
-    tabledoc=TableDoc(
-        doc='''''',
-        group='Events',
-        columns={
-            'utid': '''''',
-            'ts': '''''',
-            'dur': '''''',
-            'cpu': '''''',
-            'state': '''''',
-            'io_wait': '''''',
-            'blocked_function': '''''',
-            'waker_utid': ''''''
+                'The duration of the slice (in nanoseconds).',
+            'track_id':
+                'The id of the track this slice is located on.',
+            'category':
+                '''
+                  The "category" of the slice. If this slice originated with
+                  track_event, this column contains the category emitted.
+                  Otherwise, it is likely to be null (with limited exceptions).
+                ''',
+            'name':
+                '''
+                  The name of the slice. The name describes what was happening
+                  during the slice.
+                ''',
+            'depth':
+                'The depth of the slice in the current stack of slices.',
+            'stack_id':
+                '''
+                  A unique identifier obtained from the names of all slices
+                  in this stack. This is rarely useful and kept around only
+                  for legacy reasons.
+                ''',
+            'parent_stack_id':
+                'The stack_id for the parent of this slice. Rarely useful.',
+            'parent_id':
+                '''
+                  The id of the parent (i.e. immediate ancestor) slice for this
+                  slice.
+                ''',
+            'arg_set_id':
+                ColumnDoc(
+                    'The id of the argument set associated with this slice.',
+                    joinable='args.arg_set_id'),
+            'thread_ts':
+                '''
+                  The thread timestamp at the start of the slice. This column
+                  will only be populated if thread timestamp collection is
+                  enabled with track_event.
+                ''',
+            'thread_dur':
+                ''''
+                  The thread time used by this slice. This column will only be
+                  populated if thread timestamp collection is enabled with
+                  track_event.
+                ''',
+            'thread_instruction_count':
+                '''
+                  The value of the CPU instruction counter at the start of the
+                  slice. This column will only be populated if thread
+                  instruction collection is enabled with track_event.
+                ''',
+            'thread_instruction_delta':
+                '''
+                  The change in value of the CPU instruction counter between the
+                  start and end of the slice. This column will only be
+                  populated if thread instruction collection is enabled with
+                  track_event.
+                ''',
         }))
 
 GPU_SLICE_TABLE = Table(
+    python_module=__file__,
     class_name='GpuSliceTable',
     sql_name='gpu_slice',
     columns=[
@@ -148,27 +135,45 @@ GPU_SLICE_TABLE = Table(
         C('frame_id', CppOptional(CppUint32())),
         C('submission_id', CppOptional(CppUint32())),
         C('hw_queue_id', CppOptional(CppInt64())),
+        C('upid', CppOptional(CppUint32())),
         C('render_subpasses', CppString()),
     ],
     parent=SLICE_TABLE,
     tabledoc=TableDoc(
         doc='''''',
-        group='Events',
+        group='Slice',
         columns={
-            'context_id': '''''',
-            'render_target': '''''',
-            'render_target_name': '''''',
-            'render_pass': '''''',
-            'render_pass_name': '''''',
-            'command_buffer': '''''',
-            'command_buffer_name': '''''',
-            'frame_id': '''''',
-            'submission_id': '''''',
-            'hw_queue_id': '''''',
-            'render_subpasses': ''''''
+            'context_id':
+                '''''',
+            'render_target':
+                '''''',
+            'render_target_name':
+                '''''',
+            'render_pass':
+                '''''',
+            'render_pass_name':
+                '''''',
+            'command_buffer':
+                '''''',
+            'command_buffer_name':
+                '''''',
+            'frame_id':
+                '''''',
+            'submission_id':
+                '''''',
+            'hw_queue_id':
+                '''''',
+            'upid':
+                '''
+                  Unique process id of the app that generates this gpu render
+                  stage event.
+                ''',
+            'render_subpasses':
+                ''''''
         }))
 
 GRAPHICS_FRAME_SLICE_TABLE = Table(
+    python_module=__file__,
     class_name='GraphicsFrameSliceTable',
     sql_name='frame_slice',
     columns=[
@@ -181,7 +186,7 @@ GRAPHICS_FRAME_SLICE_TABLE = Table(
     parent=SLICE_TABLE,
     tabledoc=TableDoc(
         doc='''''',
-        group='Events',
+        group='Slice',
         columns={
             'frame_number': '''''',
             'layer_name': '''''',
@@ -191,6 +196,7 @@ GRAPHICS_FRAME_SLICE_TABLE = Table(
         }))
 
 EXPECTED_FRAME_TIMELINE_SLICE_TABLE = Table(
+    python_module=__file__,
     class_name='ExpectedFrameTimelineSliceTable',
     sql_name='expected_frame_timeline_slice',
     columns=[
@@ -201,16 +207,28 @@ EXPECTED_FRAME_TIMELINE_SLICE_TABLE = Table(
     ],
     parent=SLICE_TABLE,
     tabledoc=TableDoc(
-        doc='''''',
-        group='Misc',
+        doc='''
+        This table contains information on the expected timeline of either
+        a display frame or a surface frame.
+        ''',
+        group='Slice',
         columns={
-            'display_frame_token': '''''',
-            'surface_frame_token': '''''',
-            'upid': '''''',
-            'layer_name': ''''''
+            'display_frame_token':
+                'Display frame token (vsync id).',
+            'surface_frame_token':
+                '''
+                Surface frame token (vsync id), null if this is a display frame.
+                ''',
+            'upid':
+                '''
+                Unique process id of the app that generates the surface frame.
+                ''',
+            'layer_name':
+                'Layer name if this is a surface frame.',
         }))
 
 ACTUAL_FRAME_TIMELINE_SLICE_TABLE = Table(
+    python_module=__file__,
     class_name='ActualFrameTimelineSliceTable',
     sql_name='actual_frame_timeline_slice',
     columns=[
@@ -222,27 +240,52 @@ ACTUAL_FRAME_TIMELINE_SLICE_TABLE = Table(
         C('on_time_finish', CppInt32()),
         C('gpu_composition', CppInt32()),
         C('jank_type', CppString()),
+        C('jank_severity_type', CppString()),
         C('prediction_type', CppString()),
         C('jank_tag', CppString()),
     ],
     parent=SLICE_TABLE,
     tabledoc=TableDoc(
-        doc='''''',
-        group='Misc',
+        doc='''
+        This table contains information on the actual timeline and additional
+        analysis related to the performance of either a display frame or a
+        surface frame.
+        ''',
+        group='Slice',
         columns={
-            'display_frame_token': '''''',
-            'surface_frame_token': '''''',
-            'upid': '''''',
-            'layer_name': '''''',
-            'present_type': '''''',
-            'on_time_finish': '''''',
-            'gpu_composition': '''''',
-            'jank_type': '''''',
-            'prediction_type': '''''',
-            'jank_tag': ''''''
+            'display_frame_token':
+                'Display frame token (vsync id).',
+            'surface_frame_token':
+                '''
+                Surface frame token (vsync id), null if this is a display frame.
+                ''',
+            'upid':
+                '''
+                Unique process id of the app that generates the surface frame.
+                ''',
+            'layer_name':
+                'Layer name if this is a surface frame.',
+            'present_type':
+                'Frame\'s present type (eg. on time / early / late).',
+            'on_time_finish':
+                'Whether the frame finishes on time.',
+            'gpu_composition':
+                'Whether the frame used gpu composition.',
+            'jank_type':
+                '''
+                Specify the jank types for this frame if there's jank, or
+                none if no jank occurred.
+                ''',
+            'jank_severity_type':
+                'Severity of the jank: none if no jank.',
+            'prediction_type':
+                'Frame\'s prediction type (eg. valid / expired).',
+            'jank_tag':
+                'Jank tag based on jank type, used for slice visualization.'
         }))
 
 EXPERIMENTAL_FLAT_SLICE_TABLE = Table(
+    python_module=__file__,
     class_name='ExperimentalFlatSliceTable',
     sql_name='experimental_flat_slice',
     columns=[
@@ -257,28 +300,107 @@ EXPERIMENTAL_FLAT_SLICE_TABLE = Table(
         C('end_bound', CppInt64(), flags=ColumnFlag.HIDDEN),
     ],
     tabledoc=TableDoc(
-        doc='''''',
-        group='Misc',
+        doc='''
+          An experimental table which "flattens" stacks of slices to contain
+          only the "deepest" slice at any point in time on each track.
+        ''',
+        group='Slice',
         columns={
-            'ts': '''''',
-            'dur': '''''',
-            'track_id': '''''',
-            'category': '''''',
-            'name': '''''',
-            'arg_set_id': '''''',
-            'source_id': '''''',
-            'start_bound': '''''',
-            'end_bound': ''''''
+            'ts':
+                '''The timestamp at the start of the slice (in nanoseconds).''',
+            'dur':
+                '''The duration of the slice (in nanoseconds).''',
+            'track_id':
+                'The id of the track this slice is located on.',
+            'category':
+                '''
+                  The "category" of the slice. If this slice originated with
+                  track_event, this column contains the category emitted.
+                  Otherwise, it is likely to be null (with limited exceptions).
+                ''',
+            'name':
+                '''
+                  The name of the slice. The name describes what was happening
+                  during the slice.
+                ''',
+            'arg_set_id':
+                ColumnDoc(
+                    'The id of the argument set associated with this slice.',
+                    joinable='args.arg_set_id'),
+            'source_id':
+                'The id of the slice which this row originated from.',
         }))
+
+ANDROID_NETWORK_PACKETS_TABLE = Table(
+    python_module=__file__,
+    class_name='AndroidNetworkPacketsTable',
+    sql_name='__intrinsic_android_network_packets',
+    columns=[
+        C('iface', CppString()),
+        C('direction', CppString()),
+        C('packet_transport', CppString()),
+        C('packet_length', CppInt64()),
+        C('packet_count', CppInt64()),
+        C('socket_tag', CppUint32()),
+        C('socket_tag_str', CppString()),
+        C('socket_uid', CppUint32()),
+        C('local_port', CppOptional(CppUint32())),
+        C('remote_port', CppOptional(CppUint32())),
+        C('packet_icmp_type', CppOptional(CppUint32())),
+        C('packet_icmp_code', CppOptional(CppUint32())),
+        C('packet_tcp_flags', CppOptional(CppUint32())),
+        C('packet_tcp_flags_str', CppOptional(CppString())),
+    ],
+    parent=SLICE_TABLE,
+    wrapping_sql_view=WrappingSqlView('android_network_packets'),
+    tabledoc=TableDoc(
+        doc="""
+        This table contains details on Android Network activity.
+        """,
+        group='Slice',
+        columns={
+            'iface':
+                'The name of the network interface used',
+            'direction':
+                'The direction of traffic (Received or Transmitted)',
+            'packet_transport':
+                'The transport protocol of packets in this event',
+            'packet_length':
+                'The length (in bytes) of packets in this event',
+            'packet_count':
+                'The number of packets contained in this event',
+            'socket_tag':
+                'The Android network tag of the socket',
+            'socket_tag_str':
+                'The socket tag formatted as a hex string',
+            'socket_uid':
+                'The Linux user id of the socket',
+            'local_port':
+                'The local udp/tcp port',
+            'remote_port':
+                'The remote udp/tcp port',
+            'packet_icmp_type':
+                'The 1-byte ICMP type identifier',
+            'packet_icmp_code':
+                'The 1-byte ICMP code identifier',
+            'packet_tcp_flags':
+                'The TCP flags as an integer bitmask (FIN=0x1, SYN=0x2, etc)',
+            'packet_tcp_flags_str':
+                '''
+                The TCP flags formatted as a string bitmask (e.g. "f...a..." for
+                FIN & ACK)
+                ''',
+        },
+    ),
+)
 
 # Keep this list sorted.
 ALL_TABLES = [
     ACTUAL_FRAME_TIMELINE_SLICE_TABLE,
+    ANDROID_NETWORK_PACKETS_TABLE,
     EXPECTED_FRAME_TIMELINE_SLICE_TABLE,
     EXPERIMENTAL_FLAT_SLICE_TABLE,
     GPU_SLICE_TABLE,
     GRAPHICS_FRAME_SLICE_TABLE,
-    SCHED_SLICE_TABLE,
     SLICE_TABLE,
-    THREAD_STATE_TABLE,
 ]

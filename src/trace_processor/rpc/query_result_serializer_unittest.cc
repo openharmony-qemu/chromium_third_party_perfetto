@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-#include "src/trace_processor/rpc/query_result_serializer.h"
+#include "perfetto/ext/trace_processor/rpc/query_result_serializer.h"
 
 #include <deque>
 #include <ostream>
@@ -376,7 +376,7 @@ TEST(QueryResultSerializerTest, RandomSizes) {
       insert_values += ",";
     } else {
       insert_values += "),";
-      if (insert_values.size() > 1024 * 1024 || i == kNumCells - 1) {
+      if (insert_values.size() > 100 * 1024 || i == kNumCells - 1) {
         insert_values[insert_values.size() - 1] = ';';
         auto query = "insert into tab (a,b,c) values " + insert_values;
         insert_values = "";
@@ -408,7 +408,9 @@ TEST(QueryResultSerializerTest, ErrorBeforeStartingQuery) {
   TestDeserializer deser;
   deser.SerializeAndDeserialize(&ser);
   EXPECT_EQ(deser.cells.size(), 0u);
-  EXPECT_EQ(deser.error, "Error: incomplete input (errcode: 1)");
+  EXPECT_EQ(deser.error,
+            "Traceback (most recent call last):\n  File \"stdin\" line 1 col "
+            "1\n    insert into incomplete_input\n    ^\nincomplete input");
   EXPECT_TRUE(deser.eof_reached);
 }
 

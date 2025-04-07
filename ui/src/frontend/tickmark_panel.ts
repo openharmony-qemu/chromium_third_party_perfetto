@@ -13,64 +13,73 @@
 // limitations under the License.
 
 import m from 'mithril';
-
-import {fromNs} from '../common/time';
-
 import {TRACK_SHELL_WIDTH} from './css_constants';
-import {globals} from './globals';
-import {
-  TickGenerator,
-  TickType,
-  timeScaleForVisibleWindow,
-} from './gridline_helper';
-import {Panel, PanelSize} from './panel';
+import {getMaxMajorTicks, generateTicks, TickType} from './gridline_helper';
+import {Size2D} from '../base/geom';
+import {Panel} from './panel_container';
+import {TimeScale} from '../base/time_scale';
+import {canvasClip} from '../base/canvas_utils';
+import {SearchOverviewTrack} from './search_overview_track';
+import {TraceImpl} from '../core/trace_impl';
+import {getOrCreate} from '../base/utils';
+
+// We want to create the overview track only once per trace, but this
+// class can be delete and re-instantiated when switching between pages via
+// the sidebar. So we cache the overview track and bind it to the lifetime of
+// the TraceImpl object.
+const trackTraceMap = new WeakMap<TraceImpl, SearchOverviewTrack>();
 
 // This is used to display the summary of search results.
-export class TickmarkPanel extends Panel {
-  view() {
+export class TickmarkPanel implements Panel {
+  readonly kind = 'panel';
+  readonly selectable = false;
+  private searchOverviewTrack: SearchOverviewTrack;
+
+  constructor(private readonly trace: TraceImpl) {
+    this.searchOverviewTrack = getOrCreate(
+      trackTraceMap,
+      trace,
+      () => new SearchOverviewTrack(trace),
+    );
+  }
+
+  render(): m.Children {
     return m('.tickbar');
   }
 
-  renderCanvas(ctx: CanvasRenderingContext2D, size: PanelSize) {
-    const {timeScale, visibleWindowTime} = globals.frontendLocalState;
-
+  renderCanvas(ctx: CanvasRenderingContext2D, size: Size2D): void {
     ctx.fillStyle = '#999';
     ctx.fillRect(TRACK_SHELL_WIDTH - 2, 0, 2, size.height);
-    const relScale = timeScaleForVisibleWindow(TRACK_SHELL_WIDTH, size.width);
-    if (relScale.timeSpan.duration > 0 && relScale.widthPx > 0) {
-      for (const {type, position} of new TickGenerator(relScale)) {
-        if (type === TickType.MAJOR) ctx.fillRect(position, 0, 1, size.height);
+
+    const trackSize = {...size, width: size.width - TRACK_SHELL_WIDTH};
+    ctx.save();
+    ctx.translate(TRACK_SHELL_WIDTH, 0);
+    canvasClip(ctx, 0, 0, trackSize.width, trackSize.height);
+    this.renderTrack(ctx, trackSize);
+    ctx.restore();
+  }
+
+  private renderTrack(ctx: CanvasRenderingContext2D, size: Size2D): void {
+    const visibleWindow = this.trace.timeline.visibleWindow;
+    const timescale = new TimeScale(visibleWindow, {
+      left: 0,
+      right: size.width,
+    });
+    const timespan = visibleWindow.toTimeSpan();
+
+    if (size.width > 0 && timespan.duration > 0n) {
+      const maxMajorTicks = getMaxMajorTicks(size.width);
+
+      const offset = this.trace.timeline.timestampOffset();
+      const tickGen = generateTicks(timespan, maxMajorTicks, offset);
+      for (const {type, time} of tickGen) {
+        const px = Math.floor(timescale.timeToPx(time));
+        if (type === TickType.MAJOR) {
+          ctx.fillRect(px, 0, 1, size.height);
+        }
       }
     }
 
-    const data = globals.searchSummary;
-    for (let i = 0; i < data.tsStarts.length; i++) {
-      const tStart = data.tsStarts[i];
-      const tEnd = data.tsEnds[i];
-      if (tEnd <= visibleWindowTime.start || tStart >= visibleWindowTime.end) {
-        continue;
-      }
-      const rectStart =
-          Math.max(timeScale.timeToPx(tStart), 0) + TRACK_SHELL_WIDTH;
-      const rectEnd = timeScale.timeToPx(tEnd) + TRACK_SHELL_WIDTH;
-      ctx.fillStyle = '#ffe263';
-      ctx.fillRect(
-          Math.floor(rectStart),
-          0,
-          Math.ceil(rectEnd - rectStart),
-          size.height);
-    }
-    const index = globals.state.searchIndex;
-    const startSec = fromNs(globals.currentSearchResults.tsStarts[index]);
-    const triangleStart =
-        Math.max(timeScale.timeToPx(startSec), 0) + TRACK_SHELL_WIDTH;
-    ctx.fillStyle = '#000';
-    ctx.beginPath();
-    ctx.moveTo(triangleStart, size.height);
-    ctx.lineTo(triangleStart - 3, 0);
-    ctx.lineTo(triangleStart + 3, 0);
-    ctx.lineTo(triangleStart, size.height);
-    ctx.fill();
-    ctx.closePath();
+    this.searchOverviewTrack.render(ctx, size);
   }
 }

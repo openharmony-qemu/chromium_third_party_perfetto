@@ -9,12 +9,14 @@ package {
 
 cc_test {
   name: "CtsPerfettoTestCases",
+  team: "trendy_team_perfetto",
   srcs: [
     "device_feature_test_cts.cc",
-    "end_to_end_integrationtest_cts.cc",
     "heapprofd_java_test_cts.cc",
     "heapprofd_test_cts.cc",
+    "producer_to_consumer_integrationtest_cts.cc",
     "traced_perf_test_cts.cc",
+    ":perfetto_end_to_end_integrationtests",
     ":perfetto_protos_perfetto_config_cpp_gen",
     ":perfetto_protos_perfetto_common_cpp_gen"
   ],
@@ -38,9 +40,10 @@ cc_test {
   ],
   test_suites: [
     "cts",
-    "mts",
+    "mts-art",
     "vts10",
     "general-tests",
+    "mcts-art",
   ],
   compile_multilib: "both",
   multilib: {
@@ -58,6 +61,7 @@ cc_test {
         ":CtsPerfettoProducerApp",
         ":CtsPerfettoReleaseApp",
         ":CtsPerfettoDebuggableApp",
+        "perfetto_device_preparer.sh",
   ],
   stl: "libc++_static",
   // This test is also run via Mainline Testing against the ART Mainline

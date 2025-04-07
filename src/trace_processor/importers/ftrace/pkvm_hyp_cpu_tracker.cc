@@ -20,12 +20,18 @@
 #include "perfetto/ext/base/string_utils.h"
 #include "protos/perfetto/trace/ftrace/ftrace_event.pbzero.h"
 #include "protos/perfetto/trace/ftrace/hyp.pbzero.h"
-#include "src/trace_processor/importers/common/event_tracker.h"
 #include "src/trace_processor/importers/common/slice_tracker.h"
 #include "src/trace_processor/importers/common/track_tracker.h"
 
-namespace perfetto {
-namespace trace_processor {
+namespace perfetto::trace_processor {
+namespace {
+
+TrackTracker::LegacyCharArrayName GetTrackName(uint32_t cpu) {
+  return TrackTracker::LegacyCharArrayName{
+      base::StackString<255>("pkVM Hypervisor CPU %u", cpu)};
+}
+
+}  // namespace
 
 PkvmHypervisorCpuTracker::PkvmHypervisorCpuTracker(
     TraceProcessorContext* context)
@@ -35,7 +41,7 @@ PkvmHypervisorCpuTracker::PkvmHypervisorCpuTracker(
       hyp_enter_reason_(context->storage->InternString("hyp_enter_reason")) {}
 
 // static
-bool PkvmHypervisorCpuTracker::IsPkvmHypervisorEvent(uint16_t event_id) {
+bool PkvmHypervisorCpuTracker::IsPkvmHypervisorEvent(uint32_t event_id) {
   using protos::pbzero::FtraceEvent;
   switch (event_id) {
     case FtraceEvent::kHypEnterFieldNumber:
@@ -51,7 +57,7 @@ bool PkvmHypervisorCpuTracker::IsPkvmHypervisorEvent(uint16_t event_id) {
 
 void PkvmHypervisorCpuTracker::ParseHypEvent(uint32_t cpu,
                                              int64_t timestamp,
-                                             uint16_t event_id,
+                                             uint32_t event_id,
                                              protozero::ConstBytes blob) {
   using protos::pbzero::FtraceEvent;
   switch (event_id) {
@@ -78,21 +84,23 @@ void PkvmHypervisorCpuTracker::ParseHypEvent(uint32_t cpu,
 
 void PkvmHypervisorCpuTracker::ParseHypEnter(uint32_t cpu, int64_t timestamp) {
   // TODO(b/249050813): handle bad events (e.g. 2 hyp_enter in a row)
-
-  TrackId track_id = GetHypCpuTrackId(cpu);
+  TrackId track_id = context_->track_tracker->InternCpuTrack(
+      tracks::pkvm_hypervisor, cpu, GetTrackName(cpu));
   context_->slice_tracker->Begin(timestamp, track_id, category_, slice_name_);
 }
 
 void PkvmHypervisorCpuTracker::ParseHypExit(uint32_t cpu, int64_t timestamp) {
   // TODO(b/249050813): handle bad events (e.g. 2 hyp_exit in a row)
-  TrackId track_id = GetHypCpuTrackId(cpu);
+  TrackId track_id = context_->track_tracker->InternCpuTrack(
+      tracks::pkvm_hypervisor, cpu, GetTrackName(cpu));
   context_->slice_tracker->End(timestamp, track_id);
 }
 
 void PkvmHypervisorCpuTracker::ParseHostHcall(uint32_t cpu,
                                               protozero::ConstBytes blob) {
   protos::pbzero::HostHcallFtraceEvent::Decoder evt(blob.data, blob.size);
-  TrackId track_id = GetHypCpuTrackId(cpu);
+  TrackId track_id = context_->track_tracker->InternCpuTrack(
+      tracks::pkvm_hypervisor, cpu, GetTrackName(cpu));
 
   auto args_inserter = [this, &evt](ArgsTracker::BoundInserter* inserter) {
     StringId host_hcall = context_->storage->InternString("host_hcall");
@@ -109,7 +117,8 @@ void PkvmHypervisorCpuTracker::ParseHostHcall(uint32_t cpu,
 void PkvmHypervisorCpuTracker::ParseHostSmc(uint32_t cpu,
                                             protozero::ConstBytes blob) {
   protos::pbzero::HostSmcFtraceEvent::Decoder evt(blob.data, blob.size);
-  TrackId track_id = GetHypCpuTrackId(cpu);
+  TrackId track_id = context_->track_tracker->InternCpuTrack(
+      tracks::pkvm_hypervisor, cpu, GetTrackName(cpu));
 
   auto args_inserter = [this, &evt](ArgsTracker::BoundInserter* inserter) {
     StringId host_smc = context_->storage->InternString("host_smc");
@@ -126,7 +135,8 @@ void PkvmHypervisorCpuTracker::ParseHostSmc(uint32_t cpu,
 void PkvmHypervisorCpuTracker::ParseHostMemAbort(uint32_t cpu,
                                                  protozero::ConstBytes blob) {
   protos::pbzero::HostMemAbortFtraceEvent::Decoder evt(blob.data, blob.size);
-  TrackId track_id = GetHypCpuTrackId(cpu);
+  TrackId track_id = context_->track_tracker->InternCpuTrack(
+      tracks::pkvm_hypervisor, cpu, GetTrackName(cpu));
 
   auto args_inserter = [this, &evt](ArgsTracker::BoundInserter* inserter) {
     StringId host_mem_abort = context_->storage->InternString("host_mem_abort");
@@ -140,11 +150,4 @@ void PkvmHypervisorCpuTracker::ParseHostMemAbort(uint32_t cpu,
                                    args_inserter);
 }
 
-TrackId PkvmHypervisorCpuTracker::GetHypCpuTrackId(uint32_t cpu) {
-  base::StackString<255> track_name("pkVM Hypervisor CPU %d", cpu);
-  StringId track = context_->storage->InternString(track_name.string_view());
-  return context_->track_tracker->InternCpuTrack(track, cpu);
-}
-
-}  // namespace trace_processor
-}  // namespace perfetto
+}  // namespace perfetto::trace_processor

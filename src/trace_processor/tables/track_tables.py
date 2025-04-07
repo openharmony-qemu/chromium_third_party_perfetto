@@ -14,24 +14,34 @@
 """Contains tables for tracks."""
 
 from python.generators.trace_processor_table.public import Column as C
+from python.generators.trace_processor_table.public import ColumnDoc
+from python.generators.trace_processor_table.public import ColumnFlag
 from python.generators.trace_processor_table.public import CppInt32
 from python.generators.trace_processor_table.public import CppInt64
 from python.generators.trace_processor_table.public import CppOptional
+from python.generators.trace_processor_table.public import CppSelfTableId
 from python.generators.trace_processor_table.public import CppString
+from python.generators.trace_processor_table.public import CppTableId
+from python.generators.trace_processor_table.public import CppUint32
 from python.generators.trace_processor_table.public import Table
 from python.generators.trace_processor_table.public import TableDoc
-from python.generators.trace_processor_table.public import ColumnDoc
-from python.generators.trace_processor_table.public import CppSelfTableId
-from python.generators.trace_processor_table.public import CppUint32
+from python.generators.trace_processor_table.public import WrappingSqlView
+
+from src.trace_processor.tables.metadata_tables import CPU_TABLE, MACHINE_TABLE
 
 TRACK_TABLE = Table(
+    python_module=__file__,
     class_name="TrackTable",
-    sql_name="track",
+    sql_name="__intrinsic_track",
     columns=[
         C("name", CppString()),
         C("parent_id", CppOptional(CppSelfTableId())),
         C("source_arg_set_id", CppOptional(CppUint32())),
+        C('machine_id', CppOptional(CppTableId(MACHINE_TABLE))),
+        C("classification", CppString()),
+        C("dimension_arg_set_id", CppOptional(CppUint32())),
     ],
+    wrapping_sql_view=WrappingSqlView('track'),
     tabledoc=TableDoc(
         doc='''
           Tracks are a fundamental concept in trace processor and represent a
@@ -51,17 +61,39 @@ TRACK_TABLE = Table(
                   The track which is the "parent" of this track. Only non-null
                   for tracks created using Perfetto's track_event API.
                 ''',
+            'machine_id':
+                '''
+                  Machine identifier, non-null for tracks on a remote machine.
+                ''',
+            'classification':
+                '''
+                  Classification of this track. Responsible for grouping
+                  similar tracks together.
+                ''',
+            'dimension_arg_set_id':
+                ColumnDoc(
+                    doc='''
+                      The dimensions of the track which uniquely identify the
+                      track within a given classification.
+
+                      Join with the `args` table or use the `EXTRACT_ARG` helper
+                      function to expand the args.
+                    ''',
+                    joinable='args.arg_set_id'),
             'source_arg_set_id':
                 ColumnDoc(
                     doc='''
-                      Args for this track which store information about "source"
-                      of this track in the trace. For example: whether this
-                      track orginated from atrace, Chrome tracepoints etc.
+                      Generic key-value pairs containing extra information about
+                      the track.
+
+                      Join with the `args` table or use the `EXTRACT_ARG` helper
+                      function to expand the args.
                     ''',
                     joinable='args.arg_set_id'),
         }))
 
 PROCESS_TRACK_TABLE = Table(
+    python_module=__file__,
     class_name="ProcessTrackTable",
     sql_name="process_track",
     columns=[
@@ -81,6 +113,7 @@ PROCESS_TRACK_TABLE = Table(
         }))
 
 THREAD_TRACK_TABLE = Table(
+    python_module=__file__,
     class_name='ThreadTrackTable',
     sql_name='thread_track',
     columns=[
@@ -101,18 +134,23 @@ THREAD_TRACK_TABLE = Table(
         }))
 
 CPU_TRACK_TABLE = Table(
+    python_module=__file__,
     class_name='CpuTrackTable',
-    sql_name='cpu_track',
+    sql_name='__intrinsic_cpu_track',
     columns=[
-        C('cpu', CppUint32()),
+        C('ucpu', CppTableId(CPU_TABLE)),
     ],
+    wrapping_sql_view=WrappingSqlView('cpu_track'),
     parent=TRACK_TABLE,
     tabledoc=TableDoc(
         doc='Tracks which are associated to a single CPU',
         group='Tracks',
-        columns={'cpu': 'The CPU associated with this track'}))
+        columns={
+            'ucpu': 'The unique CPU identifier associated with this track.',
+        }))
 
 GPU_TRACK_TABLE = Table(
+    python_module=__file__,
     class_name='GpuTrackTable',
     sql_name='gpu_track',
     columns=[
@@ -122,7 +160,7 @@ GPU_TRACK_TABLE = Table(
     ],
     parent=TRACK_TABLE,
     tabledoc=TableDoc(
-        doc='Tracks assocaited to a GPU.',
+        doc='Tracks associated to a GPU.',
         group='Tracks',
         columns={
             'scope':
@@ -134,6 +172,7 @@ GPU_TRACK_TABLE = Table(
         }))
 
 COUNTER_TRACK_TABLE = Table(
+    python_module=__file__,
     class_name='CounterTrackTable',
     sql_name='counter_track',
     columns=[
@@ -156,6 +195,7 @@ COUNTER_TRACK_TABLE = Table(
         }))
 
 THREAD_COUNTER_TRACK_TABLE = Table(
+    python_module=__file__,
     class_name='ThreadCounterTrackTable',
     sql_name='thread_counter_track',
     columns=[
@@ -164,7 +204,7 @@ THREAD_COUNTER_TRACK_TABLE = Table(
     parent=COUNTER_TRACK_TABLE,
     tabledoc=TableDoc(
         doc='Tracks containing counter-like events associated to a thread.',
-        group='Tracks',
+        group='Counter Tracks',
         columns={
             'utid':
                 ColumnDoc(
@@ -174,6 +214,7 @@ THREAD_COUNTER_TRACK_TABLE = Table(
         }))
 
 PROCESS_COUNTER_TRACK_TABLE = Table(
+    python_module=__file__,
     class_name='ProcessCounterTrackTable',
     sql_name='process_counter_track',
     columns=[
@@ -184,7 +225,7 @@ PROCESS_COUNTER_TRACK_TABLE = Table(
         doc='''
           Tracks containing counter-like events associated to a process.
         ''',
-        group='Tracks',
+        group='Counter Tracks',
         columns={
             'upid':
                 ColumnDoc(
@@ -193,42 +234,23 @@ PROCESS_COUNTER_TRACK_TABLE = Table(
         }))
 
 CPU_COUNTER_TRACK_TABLE = Table(
+    python_module=__file__,
     class_name='CpuCounterTrackTable',
-    sql_name='cpu_counter_track',
+    sql_name='__intrinsic_cpu_counter_track',
     columns=[
-        C('cpu', CppUint32()),
+        C('ucpu', CppTableId(CPU_TABLE)),
     ],
+    wrapping_sql_view=WrappingSqlView('cpu_counter_track'),
     parent=COUNTER_TRACK_TABLE,
     tabledoc=TableDoc(
         doc='Tracks containing counter-like events associated to a CPU.',
-        group='Tracks',
-        columns={'cpu': 'The CPU this track is associated with'}))
-
-IRQ_COUNTER_TRACK_TABLE = Table(
-    class_name='IrqCounterTrackTable',
-    sql_name='irq_counter_track',
-    columns=[
-        C('irq', CppInt32()),
-    ],
-    parent=COUNTER_TRACK_TABLE,
-    tabledoc=TableDoc(
-        doc='Tracks containing counter-like events associated to an hardirq',
-        group='Tracks',
-        columns={'irq': 'The identifier for the hardirq.'}))
-
-SOFTIRQ_COUNTER_TRACK_TABLE = Table(
-    class_name='SoftirqCounterTrackTable',
-    sql_name='softirq_counter_track',
-    columns=[
-        C('softirq', CppInt32()),
-    ],
-    parent=COUNTER_TRACK_TABLE,
-    tabledoc=TableDoc(
-        doc='Tracks containing counter-like events associated to a softirq',
-        group='Tracks',
-        columns={'softirq': 'The identifier for the softirq.'}))
+        group='Counter Tracks',
+        columns={
+            'ucpu': 'The unique CPU identifier associated with this track.'
+        }))
 
 GPU_COUNTER_TRACK_TABLE = Table(
+    python_module=__file__,
     class_name='GpuCounterTrackTable',
     sql_name='gpu_counter_track',
     columns=[
@@ -237,94 +259,20 @@ GPU_COUNTER_TRACK_TABLE = Table(
     parent=COUNTER_TRACK_TABLE,
     tabledoc=TableDoc(
         doc='Tracks containing counter-like events associated to a GPU',
-        group='Tracks',
+        group='Counter Tracks',
         columns={'gpu_id': 'The identifier for the GPU.'}))
 
-PERF_COUNTER_TRACK_TABLE = Table(
-    class_name='PerfCounterTrackTable',
-    sql_name='perf_counter_track',
-    columns=[
-        C('perf_session_id', CppUint32()),
-        C('cpu', CppUint32()),
-        C('is_timebase', CppUint32()),
-    ],
-    parent=COUNTER_TRACK_TABLE,
-    tabledoc=TableDoc(
-        doc='Sampled counters\' values for samples in the perf_sample table.',
-        group='Tracks',
-        columns={
-            'perf_session_id':
-                'id of a distict profiling stream',
-            'cpu':
-                'the core the sample was taken on',
-            'is_timebase':
-                '''
-                  If true, indicates this counter was the sampling timebase for
-                  this perf_session_id
-                '''
-        }))
-
-ENERGY_COUNTER_TRACK_TABLE = Table(
-    class_name='EnergyCounterTrackTable',
-    sql_name='energy_counter_track',
-    columns=[
-        C('consumer_id', CppInt32()),
-        C('consumer_type', CppString()),
-        C('ordinal', CppInt32()),
-    ],
-    parent=COUNTER_TRACK_TABLE,
-    tabledoc=TableDoc(
-        doc='''
-          Energy consumers' values for energy descriptors in
-          energy_estimation_breakdown packet
-        ''',
-        group='Tracks',
-        columns={
-            'consumer_id': 'id of a distinct energy consumer',
-            'consumer_type': 'type of energy consumer',
-            'ordinal': 'ordinal of energy consumer'
-        }))
-
-UID_COUNTER_TRACK_TABLE = Table(
-    class_name='UidCounterTrackTable',
-    sql_name='uid_counter_track',
-    columns=[
-        C('uid', CppInt32()),
-    ],
-    parent=COUNTER_TRACK_TABLE,
-    tabledoc=TableDoc(
-        doc='The uid associated with this track',
-        group='Tracks',
-        columns={'uid': 'uid of process for which breakdowns are emitted'}))
-
-ENERGY_PER_UID_COUNTER_TRACK_TABLE = Table(
-    class_name='EnergyPerUidCounterTrackTable',
-    sql_name='energy_per_uid_counter_track',
-    columns=[
-        C('consumer_id', CppInt32()),
-    ],
-    parent=UID_COUNTER_TRACK_TABLE,
-    tabledoc=TableDoc(
-        doc='Energy consumer values for per uid in uid_counter_track',
-        group='Tracks',
-        columns={'consumer_id': 'id of the consumer process'}))
 
 # Keep this list sorted.
 ALL_TABLES = [
     COUNTER_TRACK_TABLE,
     CPU_COUNTER_TRACK_TABLE,
     CPU_TRACK_TABLE,
-    ENERGY_COUNTER_TRACK_TABLE,
-    ENERGY_PER_UID_COUNTER_TRACK_TABLE,
     GPU_COUNTER_TRACK_TABLE,
     GPU_TRACK_TABLE,
-    IRQ_COUNTER_TRACK_TABLE,
-    PERF_COUNTER_TRACK_TABLE,
     PROCESS_COUNTER_TRACK_TABLE,
     PROCESS_TRACK_TABLE,
-    SOFTIRQ_COUNTER_TRACK_TABLE,
     THREAD_COUNTER_TRACK_TABLE,
     THREAD_TRACK_TABLE,
     TRACK_TABLE,
-    UID_COUNTER_TRACK_TABLE,
 ]

@@ -17,10 +17,8 @@ export class OuterDragStrategy extends DragStrategy {
   private dragStartPx = 0;
 
   onDrag(x: number) {
-    const dragBeginTime = this.timeScale.pxToTime(this.dragStartPx);
-    const dragEndTime = this.timeScale.pxToTime(x);
-    const tStart = Math.min(dragBeginTime, dragEndTime);
-    const tEnd = Math.max(dragBeginTime, dragEndTime);
+    const tStart = this.map.pxToHpTime(Math.min(x, this.dragStartPx));
+    const tEnd = this.map.pxToHpTime(Math.max(x, this.dragStartPx));
     super.updateGlobals(tStart, tEnd);
   }
 

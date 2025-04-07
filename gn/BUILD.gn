@@ -14,6 +14,7 @@
 
 import("perfetto.gni")
 import("perfetto_python.gni")
+import("pkg_config.gni")
 import("proto_library.gni")
 
 if (perfetto_root_path == "//") {
@@ -56,7 +57,10 @@ action("gen_buildflags") {
   } else {
     perfetto_watchdog = "0"
   }
-  if (enable_perfetto_tools) {
+
+  # We need local symbolization to run diff tests in chrome.
+  if (enable_perfetto_tools ||
+      (enable_perfetto_trace_processor && build_with_chromium && !is_ohos)) {
     perfetto_local_symbolizer =
         "PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_LINUX() || " +
         "PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_MAC() ||" +
@@ -83,6 +87,7 @@ action("gen_buildflags") {
     "PERFETTO_TP_LINENOISE=$enable_perfetto_trace_processor_linenoise",
     "PERFETTO_TP_HTTPD=$enable_perfetto_trace_processor_httpd",
     "PERFETTO_TP_JSON=$enable_perfetto_trace_processor_json",
+    "PERFETTO_TP_INSTRUMENTS=$enable_perfetto_trace_processor_mac_instruments",
     "PERFETTO_LOCAL_SYMBOLIZER=$perfetto_local_symbolizer",
     "PERFETTO_ZLIB=$enable_perfetto_zlib",
     "PERFETTO_TRACED_PERF=$enable_perfetto_traced_perf",
@@ -91,6 +96,7 @@ action("gen_buildflags") {
     "PERFETTO_X64_CPU_OPT=$enable_perfetto_x64_cpu_opt",
     "PERFETTO_LLVM_DEMANGLE=$enable_perfetto_llvm_demangle",
     "PERFETTO_SYSTEM_CONSUMER=$enable_perfetto_system_consumer",
+    "PERFETTO_THREAD_SAFETY_ANNOTATIONS=$perfetto_thread_safety_annotations",
   ]
 
   rel_out_path = rebase_path(gen_header_path, "$root_build_dir")
@@ -207,6 +213,7 @@ group("gtest_main") {
 # Full protobuf is just for host tools .No binary shipped on device should
 # depend on this.
 protobuf_full_deps_allowlist = [
+  "../buildtools/grpc:*",
   "../src/ipc/protoc_plugin:*",
   "../src/protozero/protoc_plugin:*",
   "../src/protozero/filtering:filter_util",
@@ -224,8 +231,19 @@ config("system_protoc") {
   libs = [ "protoc" ]  # This will link against libprotoc.so
 }
 
+# pkg_deps selects the appropriate pkg-config based on current_toolchain and
+# this is a no-op if |perfetto_use_pkgconfig| is false.
+pkg_config("pkgconfig_protobuf") {
+  pkg_deps = [ "protobuf" ]
+}
+
 config("system_protobuf") {
-  libs = [ "protobuf" ]  # This will link against libprotobuf.so
+  if (perfetto_use_pkgconfig) {
+    configs = [ ":pkgconfig_protobuf" ]
+  } else {
+    # Fallback if pkg-config isn't enabled.
+    libs = [ "protobuf" ]  # This will link against libprotobuf.so
+  }
 }
 
 # protoc compiler library, it's used for building protoc plugins.
@@ -275,7 +293,7 @@ config("protobuf_gen_config") {
     "GOOGLE_PROTOBUF_NO_STATIC_INITIALIZER",
   ]
   cflags = []
-  if (!is_clang || !is_win) {
+  if (is_gcc) {
     cflags += [ "-Wno-deprecated-declarations" ]
   }
   if (is_clang && is_win) {
@@ -289,6 +307,10 @@ config("protobuf_gen_config") {
       "-Wno-unused-parameter",
       "-Wno-shadow-field-in-constructor",
       "-Wno-zero-as-null-pointer-constant",
+
+      # Fixed in upstream protobuf v3.22.0
+      # d37cbfd4485f("Update inlined_string_field.h"), but we don't have that.
+      "-Wno-undef",
     ]
   }
 
@@ -343,6 +365,16 @@ config("sqlite_third_party_include_path") {
   }
 }
 
+if (enable_perfetto_trace_processor_mac_instruments) {
+  group("expat") {
+    if (perfetto_root_path == "//") {
+      public_deps = [ "//buildtools:expat" ]
+    } else {
+      public_deps = [ "//third_party/expat:expat" ]
+    }
+  }
+}
+
 if (enable_perfetto_trace_processor_json) {
   group("jsoncpp") {
     if (perfetto_root_path == "//") {
@@ -351,6 +383,17 @@ if (enable_perfetto_trace_processor_json) {
     } else {
       public_deps = [ "//third_party/jsoncpp:jsoncpp" ]
     }
+  }
+}
+
+if (enable_perfetto_grpc) {
+  group("grpc") {
+    public_configs = [ "//buildtools:grpc_public_config" ]
+    public_deps = [ "//buildtools/grpc:grpc++" ]
+  }
+
+  group("cpp_httplib") {
+    public_deps = [ "//buildtools:cpp_httplib" ]
   }
 }
 
@@ -422,6 +465,8 @@ if (enable_perfetto_fuzzers && use_libfuzzer) {
 perfetto_py_library("pandas_py") {
 }
 perfetto_py_library("tp_vendor_py") {
+}
+perfetto_py_library("tp_resolvers_py") {
 }
 perfetto_py_library("protobuf_py") {
 }

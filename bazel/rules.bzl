@@ -29,7 +29,7 @@ def default_cc_args():
         "linkopts": select({
             "@perfetto//bazel:os_linux": ["-ldl", "-lrt", "-lpthread"],
             "@perfetto//bazel:os_osx": [],
-            "@perfetto//bazel:os_windows": [],
+            "@perfetto//bazel:os_windows": ["ws2_32.lib"],
             "//conditions:default": ["-ldl"],
         }),
     }
@@ -93,6 +93,11 @@ def perfetto_go_proto_library(**kwargs):
 # support Python proto libraries.
 def perfetto_py_proto_library(**kwargs):
     _rule_override("py_proto_library", **kwargs)
+
+# Unlike the other rules, this is an noop by default because Bazel does not
+# support Javascript/Typescript proto libraries.
+def perfetto_jspb_proto_library(**kwargs):
+    _rule_override("jspb_proto_library", **kwargs)
 
 # +----------------------------------------------------------------------------+
 # | Misc rules.                                                                |
@@ -284,31 +289,38 @@ def perfetto_cc_amalgamated_sql(name, deps, outs, namespace, **kwargs):
     if PERFETTO_CONFIG.root[:2] != "//":
         fail("Expected PERFETTO_CONFIG.root to start with //")
 
+    genrule_tool = kwargs.pop("genrule_tool", ":gen_amalgamated_sql_py")
     cmd = [
-        "$(location gen_amalgamated_sql_py)",
+        "$(location " + genrule_tool + ")",
         "--namespace",
         namespace,
         "--cpp-out=$@",
         "$(SRCS)",
     ]
 
+    root_dir = kwargs.pop("root_dir", None)
+    if root_dir:
+        cmd += [
+            "--root-dir",
+            root_dir,
+        ]
+
     perfetto_genrule(
         name = name + "_gen",
         cmd = " ".join(cmd),
         tools = [
-            ":gen_amalgamated_sql_py",
+            genrule_tool,
         ],
         srcs = deps,
         outs = outs,
     )
-
     perfetto_cc_library(
         name = name,
         hdrs = [":" + name + "_gen"],
-        **kwargs,
+        **kwargs
     )
 
-def perfetto_cc_tp_tables(name, srcs, outs, **kwargs):
+def perfetto_cc_tp_tables(name, srcs, outs, deps = [], **kwargs):
     if PERFETTO_CONFIG.root[:2] != "//":
         fail("Expected PERFETTO_CONFIG.root to start with //")
 
@@ -317,12 +329,21 @@ def perfetto_cc_tp_tables(name, srcs, outs, **kwargs):
     else:
         python_path = PERFETTO_CONFIG.root + "/python"
 
-    perfetto_py_binary(
-        name = name + "_tool",
+    perfetto_py_library(
+        name = name + "_lib",
         deps = [
             python_path + ":trace_processor_table_generator",
         ],
-        srcs = srcs + [
+        srcs = srcs,
+    )
+
+    perfetto_py_binary(
+        name = name + "_tool",
+        deps = [
+            ":" + name + "_lib",
+            python_path + ":trace_processor_table_generator",
+        ] + [d + "_lib" for d in deps],
+        srcs = [
             "tools/gen_tp_table_headers.py",
         ],
         main = "tools/gen_tp_table_headers.py",
@@ -332,9 +353,9 @@ def perfetto_cc_tp_tables(name, srcs, outs, **kwargs):
     cmd = ["$(location " + name + "_tool)"]
     cmd += ["--gen-dir", "$(RULEDIR)"]
     cmd += ["--inputs", "$(SRCS)"]
-    cmd += ["--outputs", "$(OUTS)"]
     if PERFETTO_CONFIG.root != "//":
-        cmd += ["--header-prefix", PERFETTO_CONFIG.root[2:]]
+        cmd += ["--import-prefix", PERFETTO_CONFIG.root[2:]]
+        cmd += ["--relative-input-dir", PERFETTO_CONFIG.root[2:]]
 
     perfetto_genrule(
         name = name + "_gen",
