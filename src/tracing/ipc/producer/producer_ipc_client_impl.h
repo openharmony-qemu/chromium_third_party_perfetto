@@ -132,8 +132,8 @@ class ProducerIPCClientImpl : public TracingService::ProducerEndpoint,
   bool is_shmem_provided_by_producer_ = false;
   bool direct_smb_patching_supported_ = false;
   std::vector<std::function<void()>> pending_sync_reqs_;
+  base::WeakPtrFactory<ProducerIPCClientImpl> weak_factory_{this};
   PERFETTO_THREAD_CHECKER(thread_checker_)
-  base::WeakPtrFactory<ProducerIPCClientImpl> weak_factory_{this}; // Keep last.
 };
 
 }  // namespace perfetto
