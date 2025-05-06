@@ -53,9 +53,8 @@ class KmemActivityTrigger {
     size_t num_cpus_ = 0;
     bool fd_watches_armed_ = false;
 
-    // Keep last.
-    base::WeakPtrFactory<WorkerData> weak_ptr_factory_;
     PERFETTO_THREAD_CHECKER(thread_checker_)
+    base::WeakPtrFactory<WorkerData> weak_ptr_factory_; // Keep last.
   };
 
   base::ThreadTaskRunner task_runner_;
