@@ -249,8 +249,9 @@ struct DataSourceHelper {
 template <typename DerivedDataSource,
           typename DataSourceTraits = DefaultDataSourceTraits>
 class DataSource : public DataSourceBase {
-  struct DefaultTracePointTraits;
   using Helper = DataSourceHelper<DerivedDataSource, DataSourceTraits>;
+ private:
+    struct DefaultTracePointTraits;
 
  public:
   // The BufferExhaustedPolicy to use for TraceWriters of this DataSource.
