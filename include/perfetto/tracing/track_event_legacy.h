@@ -234,7 +234,7 @@ ConvertThreadId(const PerfettoLegacyCurrentThreadId&);
 #define TRACE_EVENT1(category_group, name, arg1_name, arg1_val) \
   INTERNAL_TRACE_EVENT_ADD_SCOPED(                              \
       category_group, name, arg1_name,                          \
-      ::perfetto::internal::PossiblyNull(arg1_val))      
+      ::perfetto::internal::PossiblyNull(arg1_val))
 #define TRACE_EVENT_WITH_FLOW1(category_group, name, bind_id, flow_flags, \
                                arg1_name, arg1_val)                       \
   INTERNAL_TRACE_EVENT_ADD_SCOPED_WITH_FLOW(                              \
