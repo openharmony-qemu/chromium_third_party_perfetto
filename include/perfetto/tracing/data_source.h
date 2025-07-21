@@ -44,7 +44,6 @@
 
 #include "protos/perfetto/trace/trace_packet.pbzero.h"
 
-#include "arkweb/build/features/features.h"
 #include "build/build_config.h"
 
 // DEPRECATED: Instead of using this macro, prefer specifying symbol linkage
