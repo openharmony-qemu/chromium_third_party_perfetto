@@ -1,0 +1,11 @@
+[
+    {
+        "Name": "perfetto",
+        "License": "Apache-2.0",
+        "License File":"LICENSE",
+        "Version Number": "ea011a2c2d3aecdc4f1674887e107a56d2905edd",
+        "Owner": "huamengzheng@huawei.com",
+        "Upstream URL": "https://chromium.googlesource.com/platform/external/perfetto.git@ea011a2c2d3aecdc4f1674887e107a56d2905edd",
+        "Description": "第三方软件perfetto，适用于Android、Linux 和 Chrome 的成熟开源跟踪项目"
+    }
+]
