@@ -19,18 +19,19 @@
 -- This tracepoint is usually only available on selected Android devices.
 CREATE PERFETTO TABLE android_gpu_work_period_track (
   -- Unique identifier for this track. Joinable with track.id.
-  id UINT,
+  id LONG,
   -- Machine identifier, non-null for tracks on a remote machine.
-  machine_id UINT,
+  machine_id LONG,
   -- The UID of the package for which the GPU work period events were emitted.
-  uid INT,
+  uid LONG,
   -- The GPU identifier for which the GPU work period events were emitted.
-  gpu_id INT
+  gpu_id LONG
 ) AS
 SELECT
   id,
   machine_id,
-  extract_arg(dimension_arg_set_id, 'uid') as uid,
-  extract_arg(dimension_arg_set_id, 'gpu') as gpu_id
+  extract_arg(dimension_arg_set_id, 'uid') AS uid,
+  extract_arg(dimension_arg_set_id, 'gpu') AS gpu_id
 FROM track
-WHERE classification = 'android_gpu_work_period';
+WHERE
+  type = 'android_gpu_work_period';

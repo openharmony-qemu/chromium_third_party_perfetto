@@ -82,21 +82,13 @@ export class PerfettoTestHelper {
     await expect.soft(this.page).toHaveScreenshot(screenshotName, opts);
   }
 
-  locateTrackGroup(name: string): Locator {
-    return this.page
-      .locator('.pf-panel-group')
-      .filter({has: this.page.locator(`h1[ref="${name}"]`)});
-  }
-
   async toggleTrackGroup(locator: Locator) {
-    await locator.locator('.pf-track-title').first().click();
+    await locator.locator('.pf-track__shell').first().click();
     await this.waitForPerfettoIdle();
   }
 
   locateTrack(name: string, trackGroup?: Locator): Locator {
-    return (trackGroup ?? this.page)
-      .locator('.pf-track')
-      .filter({has: this.page.locator(`h1[ref="${name}"]`)});
+    return (trackGroup ?? this.page).locator(`.pf-track[ref="${name}"]`);
   }
 
   pinTrackUsingShellBtn(track: Locator) {
@@ -130,5 +122,17 @@ export class PerfettoTestHelper {
       throw new Error(`Could not locate file ${fPath}, cwd=${process.cwd()}`);
     }
     return fPath;
+  }
+
+  async clickMenuItem(text: string | RegExp) {
+    await this.page
+      .locator('.pf-popup-content .pf-menu-item', {hasText: text})
+      .click();
+  }
+
+  async switchToTab(text: string | RegExp) {
+    await this.page
+      .locator('.pf-tab-handle .pf-tab-handle__tab', {hasText: text})
+      .click();
   }
 }

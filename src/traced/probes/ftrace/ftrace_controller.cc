@@ -55,6 +55,7 @@
 #include "src/traced/probes/ftrace/ftrace_metadata.h"
 #include "src/traced/probes/ftrace/ftrace_procfs.h"
 #include "src/traced/probes/ftrace/ftrace_stats.h"
+#include "src/traced/probes/ftrace/predefined_tracepoints.h"
 #include "src/traced/probes/ftrace/proto_translation_table.h"
 #include "src/traced/probes/ftrace/vendor_tracepoints.h"
 
@@ -182,14 +183,18 @@ std::unique_ptr<FtraceController> FtraceController::Create(
 
   auto atrace_wrapper = std::make_unique<AtraceWrapperImpl>();
 
+  std::map<std::string, base::FlatSet<GroupAndName>> predefined_events =
+      predefined_tracepoints::GetAccessiblePredefinedTracePoints(
+          table.get(), ftrace_procfs.get());
+
   std::map<std::string, std::vector<GroupAndName>> vendor_evts =
       GetAtraceVendorEvents(ftrace_procfs.get());
 
   SyscallTable syscalls = SyscallTable::FromCurrentArch();
 
   auto muxer = std::make_unique<FtraceConfigMuxer>(
-      ftrace_procfs.get(), atrace_wrapper.get(), table.get(),
-      std::move(syscalls), vendor_evts);
+      ftrace_procfs.get(), atrace_wrapper.get(), table.get(), syscalls,
+      predefined_events, vendor_evts);
   return std::unique_ptr<FtraceController>(new FtraceController(
       std::move(ftrace_procfs), std::move(table), std::move(atrace_wrapper),
       std::move(muxer), runner, observer));
@@ -309,7 +314,7 @@ void FtraceController::ReadTick(int generation) {
   MaybeSnapshotFtraceClock();
 
   // Read all per-cpu buffers.
-  bool all_cpus_done = ReadPassForInstance(&primary_);
+  bool all_cpus_done = true;
   ForEachInstance([&](FtraceInstanceState* instance) {
     all_cpus_done &= ReadPassForInstance(instance);
   });
@@ -439,7 +444,7 @@ void FtraceController::RemoveBufferWatermarkWatches(
 // TODO(rsavitski): consider calling OnFtraceData only if we're not reposting
 // a continuation. It's a tradeoff between procfs scrape freshness and urgency
 // to drain ftrace kernel buffers.
-void FtraceController::OnBufferPastWatermark(std::string instance_name,
+void FtraceController::OnBufferPastWatermark(const std::string& instance_name,
                                              size_t cpu,
                                              bool repoll_watermark) {
   metatrace::ScopedEvent evt(metatrace::TAG_FTRACE,
@@ -547,7 +552,13 @@ void FtraceController::StopIfNeeded(FtraceInstanceState* instance) {
   if (!data_sources_.empty())
     return;
 
-  if (!retain_ksyms_on_stop_) {
+  // The kernel symbol table is discarded by default to save memory as we run as
+  // a long-lived daemon. Check if the config asked to retain the symbols (e.g.
+  // lab tests). And in either case, reset a set-but-empty table to allow trying
+  // again next time a config requests symbols.
+  if (!retain_ksyms_on_stop_ ||
+      (symbolizer_.is_valid() &&
+       symbolizer_.GetOrCreateKernelSymbolMap()->num_syms() == 0)) {
     symbolizer_.Destroy();
   }
   retain_ksyms_on_stop_ = false;
@@ -608,7 +619,7 @@ bool FtraceController::StartDataSource(FtraceDataSource* data_source) {
   // buffers while doing the symbol parsing.
   if (data_source->config().symbolize_ksyms()) {
     symbolizer_.GetOrCreateKernelSymbolMap();
-    // If at least one config sets the KSYMS_RETAIN flag, keep the ksysm map
+    // If at least one config sets the KSYMS_RETAIN flag, keep the ksyms map
     // around in StopIfNeeded().
     const auto KRET = FtraceConfig::KSYMS_RETAIN;
     retain_ksyms_on_stop_ |= data_source->config().ksyms_mem_policy() == KRET;
@@ -631,7 +642,7 @@ void FtraceController::RemoveDataSource(FtraceDataSource* data_source) {
   StopIfNeeded(instance);
 }
 
-bool DumpKprobeStats(const std::string& text, FtraceStats* ftrace_stats) {
+bool DumpKprobeStats(std::string text, FtraceStats* ftrace_stats) {
   int64_t hits = 0;
   int64_t misses = 0;
 
@@ -676,8 +687,7 @@ void FtraceController::DumpFtraceStats(FtraceDataSource* data_source,
   }
 
   if (data_source->parsing_config()->kprobes.size() > 0) {
-    DumpKprobeStats(instance->ftrace_procfs.get()->ReadKprobeStats(),
-                    stats_out);
+    DumpKprobeStats(instance->ftrace_procfs->ReadKprobeStats(), stats_out);
   }
 }
 
@@ -840,14 +850,18 @@ FtraceController::CreateSecondaryInstance(const std::string& instance_name) {
     return nullptr;
   }
 
+  std::map<std::string, base::FlatSet<GroupAndName>> predefined_events =
+      predefined_tracepoints::GetAccessiblePredefinedTracePoints(
+          table.get(), ftrace_procfs.get());
+
   // secondary instances don't support atrace and vendor tracepoint HAL
   std::map<std::string, std::vector<GroupAndName>> vendor_evts;
 
   auto syscalls = SyscallTable::FromCurrentArch();
 
   auto muxer = std::make_unique<FtraceConfigMuxer>(
-      ftrace_procfs.get(), atrace_wrapper_.get(), table.get(),
-      std::move(syscalls), vendor_evts,
+      ftrace_procfs.get(), atrace_wrapper_.get(), table.get(), syscalls,
+      predefined_events, vendor_evts,
       /* secondary_instance= */ true);
   return std::make_unique<FtraceInstanceState>(
       std::move(ftrace_procfs), std::move(table), std::move(muxer));

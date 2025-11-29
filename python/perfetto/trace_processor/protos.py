@@ -43,7 +43,10 @@ class ProtoFactory:
 
     def create_message_factory(message_type):
       message_desc = self.descriptor_pool.FindMessageTypeByName(message_type)
-      return message_factory.GetMessageClass(message_desc)
+      if hasattr(message_factory, 'GetMessageClass'):
+        return message_factory.GetMessageClass(message_desc)
+      # AOSP is stil using the old libprotobuf to create message classes.
+      return message_factory.MessageFactory().GetPrototype(message_desc)
 
     # Create proto messages to correctly communicate with the RPC API by sending
     # and receiving data as protos
@@ -54,9 +57,14 @@ class ProtoFactory:
         'perfetto.protos.ComputeMetricArgs')
     self.ComputeMetricResult = create_message_factory(
         'perfetto.protos.ComputeMetricResult')
+    self.TraceSummaryArgs = create_message_factory(
+        'perfetto.protos.TraceSummaryArgs')
+    self.TraceSummaryResult = create_message_factory(
+        'perfetto.protos.TraceSummaryResult')
     self.QueryArgs = create_message_factory('perfetto.protos.QueryArgs')
     self.QueryResult = create_message_factory('perfetto.protos.QueryResult')
     self.TraceMetrics = create_message_factory('perfetto.protos.TraceMetrics')
+    self.TraceSummary = create_message_factory('perfetto.protos.TraceSummary')
     self.DisableAndReadMetatraceResult = create_message_factory(
         'perfetto.protos.DisableAndReadMetatraceResult')
     self.CellsBatch = create_message_factory(

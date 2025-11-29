@@ -88,7 +88,9 @@ type Special =
   | 'ArrowLeft'
   | 'ArrowRight'
   | '['
-  | ']';
+  | ']'
+  | ','
+  | '.';
 export type Key = Alphabet | Number | Special;
 export type Modifier =
   | ''
@@ -124,6 +126,8 @@ const shiftExceptions = [
   '!',
   '[',
   ']',
+  '.',
+  ',',
 ];
 
 const macModifierStrings: ReadonlyMap<Modifier, string> = new Map<

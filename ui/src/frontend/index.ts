@@ -13,6 +13,7 @@
 // limitations under the License.
 
 // Keep this import first.
+import z from 'zod';
 import '../base/disposable_polyfill';
 import '../base/static_initializers';
 import NON_CORE_PLUGINS from '../gen/all_plugins';
@@ -20,11 +21,10 @@ import CORE_PLUGINS from '../gen/all_core_plugins';
 import m from 'mithril';
 import {defer} from '../base/deferred';
 import {addErrorHandler, reportError} from '../base/logging';
-import {RECORDING_V2_FLAG, featureFlags} from '../core/feature_flags';
+import {featureFlags} from '../core/feature_flags';
 import {initLiveReload} from '../core/live_reload';
 import {raf} from '../core/raf_scheduler';
 import {initWasm} from '../trace_processor/wasm_engine_proxy';
-import {setScheduleFullRedraw} from '../widgets/raf';
 import {UiMain} from './ui_main';
 import {initCssConstants} from './css_constants';
 import {registerDebugGlobals} from './debug';
@@ -33,26 +33,30 @@ import {installFileDropHandler} from './file_drop_handler';
 import {globals} from './globals';
 import {HomePage} from './home_page';
 import {postMessageHandler} from './post_message_handler';
-import {RecordPage} from './record_page';
-import {RecordPageV2} from './record_page_v2';
 import {Route, Router} from '../core/router';
 import {CheckHttpRpcConnection} from './rpc_http_dialog';
 import {maybeOpenTraceFromRoute} from './trace_url_handler';
-import {ViewerPage} from './viewer_page';
+import {renderViewerPage} from './viewer_page/viewer_page';
 import {HttpRpcEngine} from '../trace_processor/http_rpc_engine';
 import {showModal} from '../widgets/modal';
 import {IdleDetector} from './idle_detector';
 import {IdleDetectorWindow} from './idle_detector_interface';
 import {AppImpl} from '../core/app_impl';
-import {addSqlTableTab} from './sql_table_tab';
-import {configureExtensions} from '../public/lib/extensions';
+import {addLegacyTableTab} from '../components/details/sql_table_tab';
+import {configureExtensions} from '../components/extensions';
 import {
   addDebugCounterTrack,
   addDebugSliceTrack,
-} from '../public/lib/tracks/debug_tracks';
-import {addVisualizedArgTracks} from './visualized_args_tracks';
-import {addQueryResultsTab} from '../public/lib/query_table/query_result_tab';
+} from '../components/tracks/debug_tracks';
+import {addVisualizedArgTracks} from '../components/tracks/visualized_args_tracks';
+import {addQueryResultsTab} from '../components/query_table/query_result_tab';
 import {assetSrc, initAssets} from '../base/assets';
+import {
+  PERFETTO_SETTINGS_STORAGE_KEY,
+  SettingsManagerImpl,
+} from '../core/settings_manager';
+import {LocalStorage} from '../core/local_storage';
+import {DurationPrecision, TimestampFormat} from '../public/timeline';
 
 const CSP_WS_PERMISSIVE_PORT = featureFlags.register({
   id: 'cspAllowAnyWebsocketPort',
@@ -65,19 +69,18 @@ const CSP_WS_PERMISSIVE_PORT = featureFlags.register({
 });
 
 function routeChange(route: Route) {
-  raf.scheduleFullRedraw();
-  maybeOpenTraceFromRoute(route);
-  if (route.fragment) {
-    // This needs to happen after the next redraw call. It's not enough
-    // to use setTimeout(..., 0); since that may occur before the
-    // redraw scheduled above.
-    raf.addPendingCallback(() => {
+  raf.scheduleFullRedraw(() => {
+    if (route.fragment) {
+      // This needs to happen after the next redraw call. It's not enough
+      // to use setTimeout(..., 0); since that may occur before the
+      // redraw scheduled above.
       const e = document.getElementById(route.fragment);
       if (e) {
         e.scrollIntoView();
       }
-    });
-  }
+    }
+  });
+  maybeOpenTraceFromRoute(route);
 }
 
 function setupContentSecurityPolicy() {
@@ -86,6 +89,7 @@ function setupContentSecurityPolicy() {
   let rpcPolicy = [
     'http://127.0.0.1:9001', // For trace_processor_shell --httpd.
     'ws://127.0.0.1:9001', // Ditto, for the websocket RPC.
+    'ws://127.0.0.1:9167', // For Web Device Proxy.
   ];
   if (CSP_WS_PERMISSIVE_PORT.get()) {
     const route = Router.parseUrl(window.location.href);
@@ -146,12 +150,35 @@ function main() {
   // Setup content security policy before anything else.
   setupContentSecurityPolicy();
   initAssets();
-  AppImpl.initialize({
-    initialRouteArgs: Router.parseUrl(window.location.href).args,
+
+  // Create settings Manager
+  const settingsManager = new SettingsManagerImpl(
+    new LocalStorage(PERFETTO_SETTINGS_STORAGE_KEY),
+  );
+
+  // Initialize core settings...
+  const timestampFormatSetting = settingsManager.register({
+    id: 'timestampFormat',
+    name: 'Timestamp format',
+    description: 'The format of timestamps throughout Perfetto.',
+    schema: z.nativeEnum(TimestampFormat),
+    defaultValue: TimestampFormat.Timecode,
   });
 
-  // Wire up raf for widgets.
-  setScheduleFullRedraw(() => raf.scheduleFullRedraw());
+  const durationPrecisionSetting = settingsManager.register({
+    id: 'durationPrecision',
+    name: 'Duration precision',
+    description: 'The precision of durations throughout Perfetto.',
+    schema: z.nativeEnum(DurationPrecision),
+    defaultValue: DurationPrecision.Full,
+  });
+
+  AppImpl.initialize({
+    initialRouteArgs: Router.parseUrl(window.location.href).args,
+    settingsManager,
+    timestampFormatSetting,
+    durationPrecisionSetting,
+  });
 
   // Load the css. The load is asynchronous and the CSS is not ready by the time
   // appendChild returns.
@@ -222,20 +249,13 @@ function onCssLoaded() {
   document.body.innerHTML = '';
 
   const pages = AppImpl.instance.pages;
-  const traceless = true;
-  pages.registerPage({route: '/', traceless, page: HomePage});
-  const recordPage = RECORDING_V2_FLAG.get() ? RecordPageV2 : RecordPage;
-  pages.registerPage({route: '/record', traceless, page: recordPage});
-  pages.registerPage({route: '/viewer', page: ViewerPage});
+  pages.registerPage({route: '/', render: () => m(HomePage)});
+  pages.registerPage({route: '/viewer', render: () => renderViewerPage()});
   const router = new Router();
   router.onRouteChanged = routeChange;
 
-  raf.domRedraw = () => {
-    m.render(
-      document.body,
-      m(UiMain, pages.renderPageForCurrentRoute(AppImpl.instance.trace)),
-    );
-  };
+  // Mount the main mithril component. This also forces a sync render pass.
+  raf.mount(document.body, UiMain);
 
   if (
     (location.origin.startsWith('http://localhost:') ||
@@ -273,12 +293,6 @@ function onCssLoaded() {
     // cases.
     routeChange(route);
   });
-
-  // Force one initial render to get everything in place
-  m.render(
-    document.body,
-    m(UiMain, AppImpl.instance.pages.renderPageForCurrentRoute(undefined)),
-  );
 
   // Initialize plugins, now that we are ready to go.
   const pluginManager = AppImpl.instance.plugins;
@@ -328,7 +342,7 @@ configureExtensions({
   addDebugCounterTrack,
   addDebugSliceTrack,
   addVisualizedArgTracks,
-  addSqlTableTab,
+  addLegacySqlTableTab: addLegacyTableTab,
   addQueryResultsTab,
 });
 

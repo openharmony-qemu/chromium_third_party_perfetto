@@ -13,17 +13,15 @@
 // limitations under the License.
 
 import m from 'mithril';
-import {LogFilteringCriteria, LogPanel} from './logs_panel';
+import {LogFilteringCriteria, LogPanelCache, LogPanel} from './logs_panel';
 import {ANDROID_LOGS_TRACK_KIND} from '../../public/track_kinds';
 import {Trace} from '../../public/trace';
 import {PerfettoPlugin} from '../../public/plugin';
-import {sqlTableRegistry} from '../../frontend/widgets/sql/table/sql_table_registry';
-import {NUM} from '../../trace_processor/query_result';
-import {AndroidLogTrack} from './logs_track';
+import {Engine} from '../../trace_processor/engine';
+import {NUM, NUM_NULL} from '../../trace_processor/query_result';
+import {createAndroidLogTrack} from './logs_track';
 import {exists} from '../../base/utils';
 import {TrackNode} from '../../public/workspace';
-import {getAndroidLogsTable} from './table';
-import {extensions} from '../../public/lib/extensions';
 
 const VERSION = 1;
 
@@ -35,12 +33,29 @@ const DEFAULT_STATE: AndroidLogPluginState = {
     tags: [],
     textEntry: '',
     hideNonMatching: true,
+    machineExcludeList: [],
   },
 };
 
 interface AndroidLogPluginState {
   version: number;
   filter: LogFilteringCriteria;
+}
+
+async function getMachineIds(engine: Engine): Promise<number[]> {
+  // A machine might not provide Android logs, even if configured to do so.
+  // Hence, the |cpu| table might have ids not present in the logs. Given this
+  // is highly unlikely and going through all logs is expensive, we will get
+  // the ids from |cpu|, even if filter shows ids not present in logs.
+  const result = await engine.query(
+    `SELECT DISTINCT(machine_id) FROM cpu ORDER BY machine_id`,
+  );
+  const machineIds: number[] = [];
+  const it = result.iter({machine_id: NUM_NULL});
+  for (; it.valid(); it.next()) {
+    machineIds.push(it.machine_id ?? 0);
+  }
+  return machineIds;
 }
 
 export default class implements PerfettoPlugin {
@@ -62,8 +77,9 @@ export default class implements PerfettoPlugin {
       ctx.tracks.registerTrack({
         uri,
         title,
+        description: 'Android log messages',
         tags: {kind: ANDROID_LOGS_TRACK_KIND},
-        track: new AndroidLogTrack(ctx.engine),
+        track: createAndroidLogTrack(ctx, uri),
       });
       const track = new TrackNode({title, uri});
       ctx.workspace.addChildInOrder(track);
@@ -77,11 +93,15 @@ export default class implements PerfettoPlugin {
       (x) => x as LogFilteringCriteria,
     );
 
+    const cache: LogPanelCache = {
+      uniqueMachineIds: await getMachineIds(ctx.engine),
+    };
+
     ctx.tabs.registerTab({
       isEphemeral: false,
       uri: androidLogsTabUri,
       content: {
-        render: () => m(LogPanel, {filterStore: filterStore, trace: ctx}),
+        render: () => m(LogPanel, {filterStore, cache, trace: ctx}),
         getTitle: () => 'Android Logs',
       },
     });
@@ -95,17 +115,6 @@ export default class implements PerfettoPlugin {
       name: 'Show android logs tab',
       callback: () => {
         ctx.tabs.showTab(androidLogsTabUri);
-      },
-    });
-
-    sqlTableRegistry['android_logs'] = getAndroidLogsTable();
-    ctx.commands.registerCommand({
-      id: 'perfetto.ShowTable.android_logs',
-      name: 'Open table: android_logs',
-      callback: () => {
-        extensions.addSqlTableTab(ctx, {
-          table: getAndroidLogsTable(),
-        });
       },
     });
   }

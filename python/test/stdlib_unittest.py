@@ -32,7 +32,7 @@ class TestStdlib(unittest.TestCase):
 -- Comment
 CREATE PERFETTO TABLE cr_table(
     -- Column.
-    x INT
+    x LONG
 ) AS
 SELECT 1;
     '''.strip())
@@ -42,7 +42,7 @@ SELECT 1;
     self.assertEqual(fn.name, 'cr_table')
     self.assertEqual(fn.desc, 'Comment')
     self.assertEqual(fn.cols, {
-        'x': Arg('INT', 'Column.'),
+        'x': Arg('LONG', 'LONG', 'Column.'),
     })
 
   # Checks that when custom prefixes (cr for chrome/util) are present,
@@ -53,7 +53,7 @@ SELECT 1;
 -- Comment
 CREATE PERFETTO TABLE chrome_table(
     -- Column.
-    x INT
+    x LONG
 ) AS
 SELECT 1;
     '''.strip())
@@ -63,7 +63,7 @@ SELECT 1;
     self.assertEqual(fn.name, 'chrome_table')
     self.assertEqual(fn.desc, 'Comment')
     self.assertEqual(fn.cols, {
-        'x': Arg('INT', 'Column.'),
+        'x': Arg('LONG', 'LONG', 'Column.'),
     })
 
   # Checks that when custom prefixes (cr for chrome/util) are present,
@@ -74,7 +74,7 @@ SELECT 1;
 -- Comment
 CREATE PERFETTO TABLE foo_table(
     -- Column.
-    x INT
+    x LONG
 ) AS
 SELECT 1;
     '''.strip())
@@ -90,7 +90,7 @@ SELECT 1;
 -- Comment
 CREATE PERFETTO TABLE cr_table(
     -- Column.
-    x INT
+    x LONG
 ) AS
 SELECT 1;
     '''.strip())
@@ -135,7 +135,6 @@ SELECT 1;
     self.assertEqual(fn.desc,
                      'This\n is\n\n a\n      very\n\n long\n\n description.')
 
-
   def test_function_name_style(self):
     res = parse_file(
         'foo/bar.sql', f'''
@@ -155,7 +154,7 @@ SELECT 1;
 -- Table comment.
 CREATE PERFETTO TABLE foo_table(
     -- Id of slice.
-    id INT
+    id LONG
 ) AS
 SELECT 1 as id;
     '''.strip())
@@ -166,7 +165,7 @@ SELECT 1 as id;
     self.assertEqual(table.desc, 'Table comment.')
     self.assertEqual(table.type, 'TABLE')
     self.assertEqual(table.cols, {
-        'id': Arg('INT', 'Id of slice.'),
+        'id': Arg('LONG', 'LONG', 'Id of slice.'),
     })
 
   def test_perfetto_view_with_schema(self):
@@ -175,7 +174,7 @@ SELECT 1 as id;
 -- View comment.
 CREATE PERFETTO VIEW foo_table(
     -- Foo.
-    foo INT,
+    foo LONG,
     -- Bar.
     bar STRING
 ) AS
@@ -188,8 +187,8 @@ SELECT 1;
     self.assertEqual(table.desc, 'View comment.')
     self.assertEqual(table.type, 'VIEW')
     self.assertEqual(table.cols, {
-        'foo': Arg('INT', 'Foo.'),
-        'bar': Arg('STRING', 'Bar.'),
+        'foo': Arg('LONG', 'LONG', 'Foo.'),
+        'bar': Arg('STRING', 'STRING', 'Bar.'),
     })
 
   def test_function_with_new_style_docs(self):
@@ -198,7 +197,7 @@ SELECT 1;
 -- Function foo.
 CREATE PERFETTO FUNCTION foo_fn(
     -- Utid of thread.
-    utid INT,
+    utid LONG,
     -- String name.
     name STRING)
 -- Exists.
@@ -213,8 +212,8 @@ SELECT 1;
     self.assertEqual(fn.desc, 'Function foo.')
     self.assertEqual(
         fn.args, {
-            'utid': Arg('INT', 'Utid of thread.'),
-            'name': Arg('STRING', 'String name.'),
+            'utid': Arg('LONG', 'LONG', 'Utid of thread.'),
+            'name': Arg('STRING', 'STRING', 'String name.'),
         })
     self.assertEqual(fn.return_type, 'BOOL')
     self.assertEqual(fn.return_desc, 'Exists.')
@@ -225,11 +224,11 @@ SELECT 1;
 -- Function foo.
 CREATE PERFETTO FUNCTION foo_fn(
     -- Utid of thread.
-    utid INT)
+    utid LONG)
 -- Impl comment.
 RETURNS TABLE(
     -- Count.
-    count INT
+    count LONG
 )
 AS
 SELECT 1;
@@ -240,10 +239,10 @@ SELECT 1;
     self.assertEqual(fn.name, 'foo_fn')
     self.assertEqual(fn.desc, 'Function foo.')
     self.assertEqual(fn.args, {
-        'utid': Arg('INT', 'Utid of thread.'),
+        'utid': Arg('LONG', 'LONG', 'Utid of thread.'),
     })
     self.assertEqual(fn.cols, {
-        'count': Arg('INT', 'Count.'),
+        'count': Arg('LONG', 'LONG', 'Count.'),
     })
 
   def test_function_with_new_style_docs_multiline_comment(self):
@@ -255,7 +254,7 @@ CREATE PERFETTO FUNCTION foo_fn(
     -- line
     --
     -- comment.
-    arg INT)
+    arg LONG)
 -- Exists.
 RETURNS BOOL
 AS
@@ -267,7 +266,7 @@ SELECT 1;
     self.assertEqual(fn.name, 'foo_fn')
     self.assertEqual(fn.desc, 'Function foo.')
     self.assertEqual(fn.args, {
-        'arg': Arg('INT', 'Multi line  comment.'),
+        'arg': Arg('LONG', 'LONG', 'Multi line  comment.'),
     })
     self.assertEqual(fn.return_type, 'BOOL')
     self.assertEqual(fn.return_desc, 'Exists.')
@@ -278,7 +277,7 @@ SELECT 1;
 -- Function foo.
 CREATE PERFETTO FUNCTION foo_fn(
     -- Arg
-    arg INT)
+    arg LONG)
 -- Multi
 -- line
 -- return
@@ -293,7 +292,7 @@ SELECT 1;
     self.assertEqual(fn.name, 'foo_fn')
     self.assertEqual(fn.desc, 'Function foo.')
     self.assertEqual(fn.args, {
-        'arg': Arg('INT', 'Arg'),
+        'arg': Arg('LONG', 'LONG', 'Arg'),
     })
     self.assertEqual(fn.return_type, 'BOOL')
     self.assertEqual(fn.return_desc, 'Multi line return comment.')
@@ -304,7 +303,7 @@ SELECT 1;
 -- Table.
 CREATE OR REPLACE PERFETTO TABLE foo(
     -- Column.
-    x INT
+    x LONG
 )
 AS
 SELECT 1;
@@ -319,7 +318,7 @@ SELECT 1;
 -- Table.
 CREATE OR REPLACE PERFETTO VIEW foo(
     -- Column.
-    x INT
+    x LONG
 )
 AS
 SELECT 1;
@@ -347,7 +346,7 @@ SELECT 1;
 -- Function foo.
 CREATE PERFETTO FUNCTION foo_fn(
     -- Utid of thread (important).
-    utid INT)
+    utid LONG)
 -- Exists.
 RETURNS BOOL
 AS
@@ -359,7 +358,7 @@ SELECT 1;
     self.assertEqual(fn.name, 'foo_fn')
     self.assertEqual(fn.desc, 'Function foo.')
     self.assertEqual(fn.args, {
-        'utid': Arg('INT', 'Utid of thread (important).'),
+        'utid': Arg('LONG', 'LONG', 'Utid of thread (important).'),
     })
     self.assertEqual(fn.return_type, 'BOOL')
     self.assertEqual(fn.return_desc, 'Exists.')
@@ -395,7 +394,7 @@ SELECT 1;
     self.assertEqual(macro.name, 'foo_macro')
     self.assertEqual(macro.desc, 'Macro')
     self.assertEqual(macro.args, {
-        'x': Arg('TableOrSubquery', 'x Arg.'),
+        'x': Arg('TableOrSubquery', 'TableOrSubquery', 'x Arg.'),
     })
     self.assertEqual(macro.return_type, 'TableOrSubquery')
     self.assertEqual(macro.return_desc, 'Exists.')

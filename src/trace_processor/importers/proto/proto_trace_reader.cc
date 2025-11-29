@@ -192,6 +192,24 @@ base::Status ProtoTraceReader::ParsePacket(TraceBlobView packet) {
     }
   }
 
+  if (context_->content_analyzer && !decoder.has_track_event()) {
+    PacketAnalyzer::Get(context_)->ProcessPacket(packet, {});
+  }
+
+  if (decoder.has_trace_config()) {
+    ParseTraceConfig(decoder.trace_config());
+  }
+
+  return TimestampTokenizeAndPushToSorter(std::move(packet));
+}
+
+base::Status ProtoTraceReader::TimestampTokenizeAndPushToSorter(
+    TraceBlobView packet) {
+  protos::pbzero::TracePacket::Decoder decoder(packet.data(), packet.length());
+
+  uint32_t seq_id = decoder.trusted_packet_sequence_id();
+  auto* state = GetIncrementalStateForPacketSequence(seq_id);
+
   protos::pbzero::TracePacketDefaults::Decoder* defaults =
       state->current_generation()->GetTracePacketDefaults();
 
@@ -232,6 +250,19 @@ base::Status ProtoTraceReader::ParsePacket(TraceBlobView packet) {
         converted_clock_id =
             ClockTracker::SequenceToGlobalClock(seq_id, timestamp_clock_id);
       }
+      // If the clock tracker is missing a path to trace time for this clock
+      // then try to save this packet for processing later when a path exists.
+      if (!context_->clock_tracker->HasPathToTraceTime(converted_clock_id)) {
+        // We need to switch to full sorting mode to ensure that packets with
+        // missing timestamp are handled correctly. Don't save the packet unless
+        // switching to full sorting mode succeeded.
+        if (!received_eof_ && context_->sorter->SetSortingMode(
+                                  TraceSorter::SortingMode::kFullSort)) {
+          eof_deferred_packets_.push_back(std::move(packet));
+          return base::OkStatus();
+        }
+        // Fall-through and let ToTraceTime fail below.
+      }
       auto trace_ts =
           context_->clock_tracker->ToTraceTime(converted_clock_id, timestamp);
       if (!trace_ts.ok()) {
@@ -247,10 +278,6 @@ base::Status ProtoTraceReader::ParsePacket(TraceBlobView packet) {
     timestamp = std::max(latest_timestamp_, context_->sorter->max_timestamp());
   }
   latest_timestamp_ = std::max(timestamp, latest_timestamp_);
-
-  if (context_->content_analyzer && !decoder.has_track_event()) {
-    PacketAnalyzer::Get(context_)->ProcessPacket(packet, {});
-  }
 
   auto& modules = context_->modules_by_field;
   for (uint32_t field_id = 1; field_id < modules.size(); ++field_id) {
@@ -269,10 +296,6 @@ base::Status ProtoTraceReader::ParsePacket(TraceBlobView packet) {
           return res.ToStatus();
       }
     }
-  }
-
-  if (decoder.has_trace_config()) {
-    ParseTraceConfig(decoder.trace_config());
   }
 
   // Use parent data and length because we want to parse this again
@@ -395,7 +418,7 @@ base::Status ProtoTraceReader::ParseClockSnapshot(ConstBytes blob,
       if (!seq_id) {
         return base::ErrStatus(
             "ClockSnapshot packet is specifying a sequence-scoped clock id "
-            "(%" PRIu64 ") but the TracePacket sequence_id is zero",
+            "(%" PRId64 ") but the TracePacket sequence_id is zero",
             clock_id);
       }
       clock_id = ClockTracker::SequenceToGlobalClock(seq_id, clk.clock_id());
@@ -636,6 +659,14 @@ base::Status ProtoTraceReader::ParseServiceEvent(int64_t ts, ConstBytes blob) {
               context_->storage->InternString(base::StringView(formatted))));
     }
   }
+  if (tse.has_clone_started()) {
+    context_->storage->SetStats(stats::traced_clone_started_timestamp_ns, ts);
+  }
+  if (tse.has_buffer_cloned()) {
+    context_->storage->SetIndexedStats(
+        stats::traced_buf_clone_done_timestamp_ns,
+        static_cast<int>(tse.buffer_cloned()), ts);
+  }
   return base::OkStatus();
 }
 
@@ -768,6 +799,10 @@ void ProtoTraceReader::ParseTraceStats(ConstBytes blob) {
 }
 
 base::Status ProtoTraceReader::NotifyEndOfFile() {
+  received_eof_ = true;
+  for (auto& packet : eof_deferred_packets_) {
+    RETURN_IF_ERROR(TimestampTokenizeAndPushToSorter(std::move(packet)));
+  }
   return base::OkStatus();
 }
 

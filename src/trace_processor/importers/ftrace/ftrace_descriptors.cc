@@ -24,7 +24,7 @@ namespace perfetto {
 namespace trace_processor {
 namespace {
 
-std::array<FtraceMessageDescriptor, 543> descriptors{{
+std::array<FtraceMessageDescriptor, 561> descriptors{{
     {nullptr, 0, {}},
     {nullptr, 0, {}},
     {nullptr, 0, {}},
@@ -6004,6 +6004,189 @@ std::array<FtraceMessageDescriptor, 543> descriptors{{
             {},
             {"name", ProtoSchemaType::kString},
             {"type", ProtoSchemaType::kInt32},
+        },
+    },
+    {
+        "param_set_value_cpm",
+        3,
+        {
+            {},
+            {"body", ProtoSchemaType::kString},
+            {"value", ProtoSchemaType::kUint32},
+            {"timestamp", ProtoSchemaType::kInt64},
+        },
+    },
+    {
+        "do_sys_open",
+        3,
+        {
+            {},
+            {"filename", ProtoSchemaType::kString},
+            {"flags", ProtoSchemaType::kInt32},
+            {"mode", ProtoSchemaType::kInt32},
+        },
+    },
+    {
+        "open_exec",
+        1,
+        {
+            {},
+            {"filename", ProtoSchemaType::kString},
+        },
+    },
+    {
+        "block_io_start",
+        8,
+        {
+            {},
+            {"dev", ProtoSchemaType::kUint64},
+            {"sector", ProtoSchemaType::kUint64},
+            {"nr_sector", ProtoSchemaType::kUint32},
+            {"bytes", ProtoSchemaType::kUint32},
+            {"ioprio", ProtoSchemaType::kUint32},
+            {"rwbs", ProtoSchemaType::kString},
+            {"comm", ProtoSchemaType::kString},
+            {"cmd", ProtoSchemaType::kString},
+        },
+    },
+    {
+        "block_io_done",
+        8,
+        {
+            {},
+            {"dev", ProtoSchemaType::kUint64},
+            {"sector", ProtoSchemaType::kUint64},
+            {"nr_sector", ProtoSchemaType::kUint32},
+            {"bytes", ProtoSchemaType::kUint32},
+            {"ioprio", ProtoSchemaType::kUint32},
+            {"rwbs", ProtoSchemaType::kString},
+            {"comm", ProtoSchemaType::kString},
+            {"cmd", ProtoSchemaType::kString},
+        },
+    },
+    {
+        "mali_gpu_power_state",
+        3,
+        {
+            {},
+            {"change_ns", ProtoSchemaType::kUint64},
+            {"from_state", ProtoSchemaType::kInt32},
+            {"to_state", ProtoSchemaType::kInt32},
+        },
+    },
+    {
+        "dpu_disp_dpu_underrun",
+        3,
+        {
+            {},
+            {"id", ProtoSchemaType::kInt32},
+            {"frames_pending", ProtoSchemaType::kInt32},
+            {"vsync_count", ProtoSchemaType::kInt32},
+        },
+    },
+    {
+        "dpu_disp_vblank_irq_enable",
+        3,
+        {
+            {},
+            {"id", ProtoSchemaType::kInt32},
+            {"output_id", ProtoSchemaType::kInt32},
+            {"enable", ProtoSchemaType::kInt32},
+        },
+    },
+    {
+        "hrtimer_start",
+        5,
+        {
+            {},
+            {"hrtimer", ProtoSchemaType::kUint64},
+            {"function", ProtoSchemaType::kUint64},
+            {"expires", ProtoSchemaType::kInt64},
+            {"softexpires", ProtoSchemaType::kInt64},
+            {"mode", ProtoSchemaType::kUint32},
+        },
+    },
+    {
+        "hrtimer_cancel",
+        1,
+        {
+            {},
+            {"hrtimer", ProtoSchemaType::kUint64},
+        },
+    },
+    {
+        "hrtimer_expire_entry",
+        3,
+        {
+            {},
+            {"hrtimer", ProtoSchemaType::kUint64},
+            {"now", ProtoSchemaType::kInt64},
+            {"function", ProtoSchemaType::kUint64},
+        },
+    },
+    {
+        "hrtimer_expire_exit",
+        1,
+        {
+            {},
+            {"hrtimer", ProtoSchemaType::kUint64},
+        },
+    },
+    {
+        "timer_start",
+        7,
+        {
+            {},
+            {"timer", ProtoSchemaType::kUint64},
+            {"function", ProtoSchemaType::kUint64},
+            {"expires", ProtoSchemaType::kUint64},
+            {"now", ProtoSchemaType::kUint64},
+            {"deferrable", ProtoSchemaType::kUint32},
+            {"flags", ProtoSchemaType::kUint32},
+            {"bucket_expiry", ProtoSchemaType::kUint64},
+        },
+    },
+    {
+        "timer_cancel",
+        1,
+        {
+            {},
+            {"timer", ProtoSchemaType::kUint64},
+        },
+    },
+    {
+        "timer_expire_entry",
+        4,
+        {
+            {},
+            {"timer", ProtoSchemaType::kUint64},
+            {"now", ProtoSchemaType::kUint64},
+            {"function", ProtoSchemaType::kUint64},
+            {"baseclk", ProtoSchemaType::kUint64},
+        },
+    },
+    {
+        "timer_expire_exit",
+        1,
+        {
+            {},
+            {"timer", ProtoSchemaType::kUint64},
+        },
+    },
+    {
+        "local_timer_entry",
+        1,
+        {
+            {},
+            {"vector", ProtoSchemaType::kInt32},
+        },
+    },
+    {
+        "local_timer_exit",
+        1,
+        {
+            {},
+            {"vector", ProtoSchemaType::kInt32},
         },
     },
 }};

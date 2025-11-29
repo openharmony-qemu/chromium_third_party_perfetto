@@ -14,36 +14,53 @@
 
 import {assertTrue} from '../base/logging';
 import {Workspace, WorkspaceManager} from '../public/workspace';
-import {raf} from './raf_scheduler';
+import {featureFlags} from './feature_flags';
 
 const DEFAULT_WORKSPACE_NAME = 'Default Workspace';
+const DEFAULT_WORKSPACE_EDITABLE_FLAG = featureFlags.register({
+  id: 'defaultWorkspaceEditable',
+  name: 'Enable Default Workspace Editing',
+  description:
+    'Allows tracks within the default workspace to be removed and rearranged using drag-and-drop operations.',
+  defaultValue: false,
+});
 
 export class WorkspaceManagerImpl implements WorkspaceManager {
+  readonly defaultWorkspace = new Workspace();
   private _workspaces: Workspace[] = [];
   private _currentWorkspace: Workspace;
 
   constructor() {
-    // TS compiler cannot see that we are indirectly initializing
-    // _currentWorkspace via resetWorkspaces(), hence the re-assignment.
-    this._currentWorkspace = this.createEmptyWorkspace(DEFAULT_WORKSPACE_NAME);
+    this.defaultWorkspace.title = DEFAULT_WORKSPACE_NAME;
+    this.defaultWorkspace.userEditable = DEFAULT_WORKSPACE_EDITABLE_FLAG.get();
+    this._currentWorkspace = this.defaultWorkspace;
   }
 
   createEmptyWorkspace(title: string): Workspace {
     const workspace = new Workspace();
     workspace.title = title;
-    workspace.onchange = () => raf.scheduleFullRedraw();
     this._workspaces.push(workspace);
     return workspace;
   }
 
+  removeWorkspace(ws: Workspace) {
+    if (ws === this.currentWorkspace) {
+      this._currentWorkspace = this.defaultWorkspace;
+    }
+    this._workspaces = this._workspaces.filter((w) => w !== ws);
+  }
+
   switchWorkspace(workspace: Workspace): void {
     // If this fails the workspace doesn't come from createEmptyWorkspace().
-    assertTrue(this._workspaces.includes(workspace));
+    assertTrue(
+      this._workspaces.includes(workspace) ||
+        workspace === this.defaultWorkspace,
+    );
     this._currentWorkspace = workspace;
   }
 
   get all(): ReadonlyArray<Workspace> {
-    return this._workspaces;
+    return [this.defaultWorkspace].concat(this._workspaces);
   }
 
   get currentWorkspace() {

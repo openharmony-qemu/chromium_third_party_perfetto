@@ -29,33 +29,32 @@
 -- each job in a trace.
 CREATE PERFETTO TABLE android_job_scheduler_events (
   -- Id of the scheduled job assigned by the app developer.
-  job_id INT,
+  job_id LONG,
   -- Uid of the process running the scheduled job.
-  uid INT,
+  uid LONG,
   -- Package name of the process running the scheduled job.
   package_name STRING,
   -- Service component name of the scheduled job.
   job_service_name STRING,
   -- Thread track id of the job scheduler event slice.
-  track_id INT,
+  track_id JOINID(track.id),
   -- Slice id of the job scheduler event slice.
-  id INT,
+  id LONG,
   -- Timestamp the job was scheduled.
-  ts INT,
+  ts TIMESTAMP,
   -- Duration of the scheduled job.
-  dur INT
-  ) AS
+  dur DURATION
+) AS
 SELECT
-  CAST(STR_SPLIT(slice.name, '#', 1) AS INT) AS job_id,
-  CAST(STR_SPLIT(STR_SPLIT(slice.name, '<', 1), '>', 0) AS INT) AS uid,
-  STR_SPLIT(STR_SPLIT(slice.name, '>', 1), '/', 0) AS package_name,
-  STR_SPLIT(STR_SPLIT(slice.name, '/', 1), '#', 0) AS job_service_name,
+  cast_int!(STR_SPLIT(slice.name, '#', 1)) AS job_id,
+  cast_int!(STR_SPLIT(STR_SPLIT(slice.name, '<', 1), '>', 0)) AS uid,
+  str_split(str_split(slice.name, '>', 1), '/', 0) AS package_name,
+  str_split(str_split(slice.name, '/', 1), '#', 0) AS job_service_name,
   track_id,
   slice.id,
   slice.ts,
-  IIF(slice.dur = -1, trace_end() - slice.ts, slice.dur) AS dur
-FROM
-  slice
+  iif(slice.dur = -1, trace_end() - slice.ts, slice.dur) AS dur
+FROM slice
 JOIN process_track
   ON slice.track_id = process_track.id
 JOIN process

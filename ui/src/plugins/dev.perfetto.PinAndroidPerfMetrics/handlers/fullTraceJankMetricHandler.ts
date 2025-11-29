@@ -19,7 +19,7 @@ import {
   MetricHandler,
 } from './metricUtils';
 import {Trace} from '../../../public/trace';
-import {addDebugSliceTrack} from '../../../public/debug_tracks';
+import {addDebugSliceTrack} from '../../../components/tracks/debug_tracks';
 
 class FullTraceJankMetricHandler implements MetricHandler {
   /**
@@ -52,7 +52,7 @@ class FullTraceJankMetricHandler implements MetricHandler {
   public async addMetricTrack(metricData: FullTraceMetricData, ctx: Trace) {
     const INCLUDE_PREQUERY = `
     INCLUDE PERFETTO MODULE android.frames.jank_type;
-    INCLUDE PERFETTO MODULE slices.slices;
+    INCLUDE PERFETTO MODULE slices.with_context;
     `;
     const config = this.fullTraceJankConfig(metricData);
     await ctx.engine.query(INCLUDE_PREQUERY);
@@ -88,14 +88,13 @@ class FullTraceJankMetricHandler implements MetricHandler {
         dur as dur,
         track_id as track_id,
         id as slice_id,
-        thread_dur as thread_dur,
         category,
         thread_name,
         tid as tid,
         process_name,
         pid as pid
-      FROM _slice_with_thread_and_process_info
-      JOIN filtered_args ON filtered_args.arg_set_id = _slice_with_thread_and_process_info.arg_set_id
+      FROM thread_or_process_slice
+      JOIN filtered_args ON filtered_args.arg_set_id = thread_or_process_slice.arg_set_id
       WHERE process_name = '${processName}'`;
     const fullTraceJankColumns = [
       'name',
@@ -103,7 +102,6 @@ class FullTraceJankMetricHandler implements MetricHandler {
       'dur',
       'track_id',
       'slice_id',
-      'thread_dur',
       'category',
       'thread_name',
       'tid',

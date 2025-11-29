@@ -22,6 +22,8 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "perfetto/base/logging.h"
 #include "perfetto/base/status.h"
@@ -30,6 +32,7 @@
 #include "perfetto/public/compiler.h"
 #include "perfetto/trace_processor/trace_blob_view.h"
 #include "src/trace_processor/importers/common/legacy_v8_cpu_profile_tracker.h"
+#include "src/trace_processor/importers/common/parser_types.h"
 #include "src/trace_processor/importers/json/json_utils.h"
 #include "src/trace_processor/sorter/trace_sorter.h"  // IWYU pragma: keep
 #include "src/trace_processor/storage/stats.h"
@@ -576,7 +579,27 @@ base::Status JsonTraceTokenizer::HandleTraceEvent(const char* start,
         continue;
       }
     }
-    context_->sorter->PushJsonValue(ts, unparsed.ToStdString(), opt_dur);
+    JsonEvent::Type type;
+    if (opt_raw_ph && opt_raw_ph->size() == 1) {
+      switch ((*opt_raw_ph)[0]) {
+        case 'B':
+          type = JsonEvent::Begin();
+          break;
+        case 'E':
+          type = JsonEvent::End();
+          break;
+        case 'X':
+          if (opt_dur) {
+            type = JsonEvent::Scoped{*opt_dur};
+          } else {
+            type = JsonEvent::Other();
+          }
+          break;
+      }
+    } else {
+      type = JsonEvent::Other();
+    }
+    context_->sorter->PushJsonValue(ts, unparsed.ToStdString(), type);
   }
   return SetOutAndReturn(next, out);
 }
@@ -602,15 +625,23 @@ base::Status JsonTraceTokenizer::ParseV8SampleEvent(base::StringView unparsed) {
   const auto& profile = val["cpuProfile"];
   for (const auto& n : profile["nodes"]) {
     uint32_t node_id = n["id"].asUInt();
-    std::optional<uint32_t> parent_node_id =
-        n.isMember("parent") ? std::make_optional(n["parent"].asUInt())
-                             : std::nullopt;
+    std::optional<uint32_t> parent_node_id;
+    if (n.isMember("parent")) {
+      parent_node_id = std::make_optional(n["parent"].asUInt());
+    }
+    std::vector<uint32_t> children;
+    if (n.isMember("children")) {
+      children.reserve(n.size());
+      for (const auto& c : n["children"]) {
+        children.push_back(c.asUInt());
+      }
+    }
     const auto& frame = n["callFrame"];
     base::StringView url =
         frame.isMember("url") ? frame["url"].asCString() : base::StringView();
     base::StringView function_name = frame["functionName"].asCString();
     base::Status status = context_->legacy_v8_cpu_profile_tracker->AddCallsite(
-        *id, pid, node_id, parent_node_id, url, function_name);
+        *id, pid, node_id, parent_node_id, url, function_name, children);
     if (!status.ok()) {
       context_->storage->IncrementStats(
           stats::legacy_v8_cpu_profile_invalid_callsite);
