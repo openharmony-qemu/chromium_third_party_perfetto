@@ -14,9 +14,8 @@
 
 import m from 'mithril';
 import {channelChanged, getNextChannel, setChannel} from '../../core/channels';
-import {featureFlags, Flag, OverrideState} from '../../core/feature_flags';
-import {raf} from '../../core/raf_scheduler';
-import {PageAttrs} from '../../public/page';
+import {featureFlags} from '../../core/feature_flags';
+import {Flag, OverrideState} from '../../public/feature_flag';
 import {Router} from '../../core/router';
 
 const RELEASE_PROCESS_URL =
@@ -51,7 +50,6 @@ class SelectWidget implements m.ClassComponent<SelectWidgetAttrs> {
           onchange: (e: InputEvent) => {
             const value = (e.target as HTMLSelectElement).value;
             attrs.onSelect(value);
-            raf.scheduleFullRedraw();
           },
         },
         attrs.options.map((o) => {
@@ -100,7 +98,11 @@ class FlagWidget implements m.ClassComponent<FlagWidgetAttrs> {
   }
 }
 
-export class FlagsPage implements m.ClassComponent<PageAttrs> {
+export interface FlagsPageAttrs {
+  readonly subpage?: string;
+}
+
+export class FlagsPage implements m.ClassComponent<FlagsPageAttrs> {
   view() {
     const needsReload = channelChanged();
     return m(
@@ -138,18 +140,30 @@ export class FlagsPage implements m.ClassComponent<PageAttrs> {
           {
             onclick: () => {
               featureFlags.resetAll();
-              raf.scheduleFullRedraw();
             },
           },
           'Reset all below',
         ),
 
-        featureFlags.allFlags().map((flag) => m(FlagWidget, {flag})),
+        featureFlags
+          .allFlags()
+          .filter((p) => !p.id.startsWith('plugin_'))
+          .map((flag) => m(FlagWidget, {flag})),
+
+        m(
+          '.flags-page__footer',
+          m(
+            'span',
+            'Are you looking for plugins? These have moved to the ',
+            m('a', {href: '#!/plugins'}, 'plugins'),
+            ' page.',
+          ),
+        ),
       ),
     );
   }
 
-  oncreate(vnode: m.VnodeDOM<PageAttrs>) {
+  oncreate(vnode: m.VnodeDOM<FlagsPageAttrs>) {
     const flagId = /[/](\w+)/.exec(vnode.attrs.subpage ?? '')?.slice(1, 2)[0];
     if (flagId) {
       const flag = vnode.dom.querySelector(`#${flagId}`);

@@ -18,7 +18,7 @@ import {Hotkey, Platform} from '../../base/hotkeys';
 import {isString} from '../../base/object_utils';
 import {Icons} from '../../base/semantic_icons';
 import {Anchor} from '../../widgets/anchor';
-import {Button} from '../../widgets/button';
+import {Button, ButtonBar, ButtonVariant} from '../../widgets/button';
 import {Callout} from '../../widgets/callout';
 import {Checkbox} from '../../widgets/checkbox';
 import {Editor} from '../../widgets/editor';
@@ -26,7 +26,7 @@ import {EmptyState} from '../../widgets/empty_state';
 import {Form, FormLabel} from '../../widgets/form';
 import {HotkeyGlyphs} from '../../widgets/hotkey_glyphs';
 import {Icon} from '../../widgets/icon';
-import {Menu, MenuDivider, MenuItem, PopupMenu2} from '../../widgets/menu';
+import {Menu, MenuDivider, MenuItem, PopupMenu} from '../../widgets/menu';
 import {showModal} from '../../widgets/modal';
 import {
   MultiSelect,
@@ -41,11 +41,9 @@ import {Switch} from '../../widgets/switch';
 import {TextInput} from '../../widgets/text_input';
 import {MultiParagraphText, TextParagraph} from '../../widgets/text_paragraph';
 import {LazyTreeNode, Tree, TreeNode} from '../../widgets/tree';
-import {VegaView} from '../../widgets/vega_view';
-import {PageAttrs} from '../../public/page';
-import {PopupMenuButton} from '../../widgets/popup_menu';
+import {VegaView} from '../../components/widgets/vega_view';
 import {TableShowcase} from './table_showcase';
-import {TreeTable, TreeTableAttrs} from '../../frontend/widgets/treetable';
+import {TreeTable, TreeTableAttrs} from '../../components/widgets/treetable';
 import {Intent} from '../../widgets/common';
 import {
   VirtualTable,
@@ -56,8 +54,22 @@ import {TagInput} from '../../widgets/tag_input';
 import {SegmentedButtons} from '../../widgets/segmented_buttons';
 import {MiddleEllipsis} from '../../widgets/middle_ellipsis';
 import {Chip, ChipBar} from '../../widgets/chip';
-import {TrackWidget} from '../../widgets/track_widget';
-import {scheduleFullRedraw} from '../../widgets/raf';
+import {TrackShell} from '../../widgets/track_shell';
+import {CopyableLink} from '../../widgets/copyable_link';
+import {VirtualOverlayCanvas} from '../../widgets/virtual_overlay_canvas';
+import {SplitPanel} from '../../widgets/split_panel';
+import {TabbedSplitPanel} from '../../widgets/tabbed_split_panel';
+import {parseAndPrintTree} from '../../base/perfetto_sql_lang/language';
+import {CursorTooltip} from '../../widgets/cursor_tooltip';
+import {MultiselectInput} from '../../widgets/multiselect_input';
+import {
+  DataGrid,
+  DataGridAttrs,
+} from '../../components/widgets/data_grid/data_grid';
+import {InMemoryDataSource} from '../../components/widgets/data_grid/in_memory_data_source';
+import {SQLDataSource} from '../../components/widgets/data_grid/sql_data_source';
+import {App} from '../../public/app';
+import {Engine} from '../../trace_processor/engine';
 
 const DATA_ENGLISH_LETTER_FREQUENCY = {
   table: [
@@ -307,10 +319,8 @@ function PortalButton() {
       return [
         m(Button, {
           label: 'Toggle Portal',
-          intent: Intent.Primary,
           onclick: () => {
             portalOpen = !portalOpen;
-            scheduleFullRedraw();
           },
         }),
         portalOpen &&
@@ -362,7 +372,6 @@ function ControlledPopup() {
           label: 'Close Popup',
           onclick: () => {
             popupOpen = !popupOpen;
-            scheduleFullRedraw();
           },
         }),
       );
@@ -498,7 +507,6 @@ class WidgetShowcase implements m.ClassComponent<WidgetShowcaseAttrs> {
       label: key,
       onchange: () => {
         this.optValues[key] = !Boolean(this.optValues[key]);
-        scheduleFullRedraw();
       },
     });
   }
@@ -512,7 +520,6 @@ class WidgetShowcase implements m.ClassComponent<WidgetShowcaseAttrs> {
         value: this.optValues[key],
         oninput: (e: Event) => {
           this.optValues[key] = (e.target as HTMLInputElement).value;
-          scheduleFullRedraw();
         },
       }),
     );
@@ -530,7 +537,6 @@ class WidgetShowcase implements m.ClassComponent<WidgetShowcaseAttrs> {
           this.optValues[key] = Number.parseInt(
             (e.target as HTMLInputElement).value,
           );
-          scheduleFullRedraw();
         },
       }),
     );
@@ -550,7 +556,6 @@ class WidgetShowcase implements m.ClassComponent<WidgetShowcaseAttrs> {
           onchange: (e: Event) => {
             const el = e.target as HTMLSelectElement;
             this.optValues[key] = el.value;
-            scheduleFullRedraw();
           },
         },
         optionElements,
@@ -642,14 +647,12 @@ function TagInputDemo() {
         onTagAdd: (tag) => {
           tags.push(tag);
           tagInputValue = '';
-          scheduleFullRedraw();
         },
         onChange: (value) => {
           tagInputValue = value;
         },
         onTagRemove: (index) => {
           tags.splice(index, 1);
-          scheduleFullRedraw();
         },
       });
     },
@@ -666,27 +669,62 @@ function SegmentedButtonsDemo({attrs}: {attrs: {}}) {
         selectedOption: selectedIdx,
         onOptionSelected: (num) => {
           selectedIdx = num;
-          scheduleFullRedraw();
         },
       });
     },
   };
 }
 
-export class WidgetsPage implements m.ClassComponent<PageAttrs> {
-  view() {
+export class WidgetsPage implements m.ClassComponent<{app: App}> {
+  view({attrs}: m.Vnode<{app: App}>) {
     return m(
       '.widgets-page',
       m('h1', 'Widgets'),
       m(WidgetShowcase, {
         label: 'Button',
-        renderWidget: ({label, icon, rightIcon, ...rest}) =>
-          m(Button, {
-            icon: arg(icon, 'send'),
-            rightIcon: arg(rightIcon, 'arrow_forward'),
-            label: arg(label, 'Button', ''),
-            ...rest,
-          }),
+        renderWidget: ({
+          label,
+          icon,
+          rightIcon,
+          showAsGrid,
+          showInlineWithText,
+          ...rest
+        }) =>
+          Boolean(showAsGrid)
+            ? m(
+                '',
+                {
+                  style: {
+                    display: 'grid',
+                    gridTemplateColumns: 'auto auto auto',
+                    gap: '4px',
+                  },
+                },
+                Object.values(Intent).map((intent) => {
+                  return Object.values(ButtonVariant).map((variant) => {
+                    return m(Button, {
+                      style: {
+                        width: '80px',
+                      },
+                      ...rest,
+                      label: variant,
+                      variant,
+                      intent,
+                    });
+                  });
+                }),
+              )
+            : m('', [
+                Boolean(showInlineWithText) && 'Inline',
+                m(Button, {
+                  icon: arg(icon, 'send'),
+                  rightIcon: arg(rightIcon, 'arrow_forward'),
+                  label: arg(label, 'Button', ''),
+                  onclick: () => alert('button pressed'),
+                  ...rest,
+                }),
+                Boolean(showInlineWithText) && 'text',
+              ]),
         initialOpts: {
           label: true,
           icon: true,
@@ -696,6 +734,12 @@ export class WidgetsPage implements m.ClassComponent<PageAttrs> {
           active: false,
           compact: false,
           loading: false,
+          variant: new EnumOption(
+            ButtonVariant.Filled,
+            Object.values(ButtonVariant),
+          ),
+          showAsGrid: false,
+          showInlineWithText: false,
         },
       }),
       m(WidgetShowcase, {
@@ -727,15 +771,42 @@ export class WidgetsPage implements m.ClassComponent<PageAttrs> {
         },
       }),
       m(WidgetShowcase, {
+        label: 'Anchor',
+        renderWidget: ({icon, showInlineWithText, long}) =>
+          m('', [
+            Boolean(showInlineWithText) && 'Inline',
+            m(
+              Anchor,
+              {
+                icon: arg(icon, 'open_in_new'),
+                href: 'https://perfetto.dev/docs/',
+                target: '_blank',
+              },
+              Boolean(long)
+                ? 'This is some really long text and it will probably overflow the container'
+                : 'Link',
+            ),
+            Boolean(showInlineWithText) && 'text',
+          ]),
+
+        initialOpts: {
+          icon: true,
+          showInlineWithText: false,
+          long: false,
+        },
+      }),
+      m(WidgetShowcase, {
         label: 'Text Input',
-        renderWidget: ({placeholder, ...rest}) =>
+        renderWidget: ({placeholder, leftIcon, ...rest}) =>
           m(TextInput, {
             placeholder: arg(placeholder, 'Placeholder...', ''),
+            leftIcon: arg(leftIcon, 'search'),
             ...rest,
           }),
         initialOpts: {
           placeholder: true,
           disabled: false,
+          leftIcon: true,
         },
       }),
       m(WidgetShowcase, {
@@ -766,19 +837,14 @@ export class WidgetsPage implements m.ClassComponent<PageAttrs> {
         },
       }),
       m(WidgetShowcase, {
-        label: 'Anchor',
-        renderWidget: ({icon}) =>
-          m(
-            Anchor,
-            {
-              icon: arg(icon, 'open_in_new'),
-              href: 'https://perfetto.dev/docs/',
-              target: '_blank',
-            },
-            'This is some really long text and it will probably overflow the container',
-          ),
+        label: 'CopyableLink',
+        renderWidget: ({noicon}) =>
+          m(CopyableLink, {
+            noicon: arg(noicon, true),
+            url: 'https://perfetto.dev/docs/',
+          }),
         initialOpts: {
-          icon: true,
+          noicon: false,
         },
       }),
       m(WidgetShowcase, {
@@ -854,7 +920,6 @@ export class WidgetsPage implements m.ClassComponent<PageAttrs> {
               diffs.forEach(({id, checked}) => {
                 options[id] = checked;
               });
-              scheduleFullRedraw();
             },
             ...rest,
           }),
@@ -881,7 +946,6 @@ export class WidgetsPage implements m.ClassComponent<PageAttrs> {
               diffs.forEach(({id, checked}) => {
                 options[id] = checked;
               });
-              scheduleFullRedraw();
             },
             ...rest,
           }),
@@ -892,27 +956,10 @@ export class WidgetsPage implements m.ClassComponent<PageAttrs> {
         },
       }),
       m(WidgetShowcase, {
-        label: 'PopupMenu',
+        label: 'MultiselectInput',
+        description: `Tag input with options`,
         renderWidget: () => {
-          return m(PopupMenuButton, {
-            icon: 'description',
-            items: [
-              {itemType: 'regular', text: 'New', callback: () => {}},
-              {itemType: 'regular', text: 'Open', callback: () => {}},
-              {itemType: 'regular', text: 'Save', callback: () => {}},
-              {itemType: 'regular', text: 'Delete', callback: () => {}},
-              {
-                itemType: 'group',
-                text: 'Share',
-                itemId: 'foo',
-                children: [
-                  {itemType: 'regular', text: 'Friends', callback: () => {}},
-                  {itemType: 'regular', text: 'Family', callback: () => {}},
-                  {itemType: 'regular', text: 'Everyone', callback: () => {}},
-                ],
-              },
-            ],
-          });
+          return m(MultiselectInputDemo);
         },
       }),
       m(WidgetShowcase, {
@@ -948,10 +995,10 @@ export class WidgetsPage implements m.ClassComponent<PageAttrs> {
           ),
       }),
       m(WidgetShowcase, {
-        label: 'PopupMenu2',
+        label: 'PopupMenu',
         renderWidget: (opts) =>
           m(
-            PopupMenu2,
+            PopupMenu,
             {
               trigger: m(Button, {
                 label: 'Menu',
@@ -993,6 +1040,11 @@ export class WidgetsPage implements m.ClassComponent<PageAttrs> {
         },
       }),
       m(WidgetShowcase, {
+        label: 'CursorTooltip',
+        description: 'A tooltip that follows the mouse around.',
+        renderWidget: () => m(CursorTooltipShowcase),
+      }),
+      m(WidgetShowcase, {
         label: 'Spinner',
         description: `Simple spinner, rotates forever.
             Width and height match the font size.`,
@@ -1029,7 +1081,7 @@ export class WidgetsPage implements m.ClassComponent<PageAttrs> {
             m(TreeNode, {
               left: 'SQL',
               right: m(
-                PopupMenu2,
+                PopupMenu,
                 {
                   popupPosition: PopupPosition.RightStart,
                   trigger: m(
@@ -1037,7 +1089,7 @@ export class WidgetsPage implements m.ClassComponent<PageAttrs> {
                     {
                       icon: Icons.ContextMenu,
                     },
-                    'SELECT * FROM raw WHERE id = 123',
+                    'SELECT * FROM ftrace_event WHERE id = 123',
                   ),
                 },
                 m(MenuItem, {
@@ -1109,18 +1161,20 @@ export class WidgetsPage implements m.ClassComponent<PageAttrs> {
             {
               trigger: m(Button, {label: 'Open the popup'}),
             },
-            m(
-              PopupMenu2,
-              {
-                trigger: m(Button, {label: 'Select an option'}),
-              },
-              m(MenuItem, {label: 'Option 1'}),
-              m(MenuItem, {label: 'Option 2'}),
-            ),
-            m(Button, {
-              label: 'Done',
-              dismissPopup: true,
-            }),
+            m(ButtonBar, [
+              m(
+                PopupMenu,
+                {
+                  trigger: m(Button, {label: 'Select an option'}),
+                },
+                m(MenuItem, {label: 'Option 1'}),
+                m(MenuItem, {label: 'Option 2'}),
+              ),
+              m(Button, {
+                label: 'Done',
+                dismissPopup: true,
+              }),
+            ]),
           ),
       }),
       m(WidgetShowcase, {
@@ -1139,7 +1193,13 @@ export class WidgetsPage implements m.ClassComponent<PageAttrs> {
       }),
       m(WidgetShowcase, {
         label: 'Editor',
-        renderWidget: () => m(Editor),
+        renderWidget: () =>
+          m(Editor, {
+            language: 'perfetto-sql',
+            onUpdate: (text) => {
+              parseAndPrintTree(text);
+            },
+          }),
       }),
       m(WidgetShowcase, {
         label: 'VegaView',
@@ -1160,13 +1220,13 @@ export class WidgetsPage implements m.ClassComponent<PageAttrs> {
         },
       }),
       m(WidgetShowcase, {
-        label: 'Form within PopupMenu2',
+        label: 'Form within PopupMenu',
         description: `A form placed inside a popup menu works just fine,
               and the cancel/submit buttons also dismiss the popup. A bit more
               margin is added around it too, which improves the look and feel.`,
         renderWidget: () =>
           m(
-            PopupMenu2,
+            PopupMenu,
             {
               trigger: m(Button, {label: 'Popup!'}),
             },
@@ -1243,6 +1303,30 @@ export class WidgetsPage implements m.ClassComponent<PageAttrs> {
       }),
       m(WidgetShowcase, {
         label: 'Modal',
+        description: `Shows a dialog box in the center of the screen over the
+                      top of other elements.`,
+        renderWidget: () =>
+          m(Button, {
+            label: 'Show Modal',
+            onclick: () => {
+              showModal({
+                title: 'Attention',
+                content: () => 'This is a modal dialog',
+                buttons: [
+                  {
+                    text: 'Cancel',
+                  },
+                  {
+                    text: 'OK',
+                    primary: true,
+                  },
+                ],
+              });
+            },
+          }),
+      }),
+      m(WidgetShowcase, {
+        label: 'Advanced Modal',
         description: `A helper for modal dialog.`,
         renderWidget: () => m(ModalShowcase),
       }),
@@ -1285,7 +1369,6 @@ export class WidgetsPage implements m.ClassComponent<PageAttrs> {
                 offset: rowOffset,
                 rows,
               };
-              scheduleFullRedraw();
             },
           };
           return m(VirtualTable, attrs);
@@ -1342,22 +1425,29 @@ export class WidgetsPage implements m.ClassComponent<PageAttrs> {
         },
       }),
       m(WidgetShowcase, {
-        label: 'Track',
-        description: `A track`,
+        label: 'TrackShell',
+        description: `The Mithril parts of a track (the shell, mainly).`,
         renderWidget: (opts) => {
-          const {buttons, chips, multipleTracks, ...rest} = opts;
+          const {buttons, chips, multipleTracks, error, ...rest} = opts;
           const dummyButtons = () => [
             m(Button, {icon: 'info', compact: true}),
             m(Button, {icon: 'settings', compact: true}),
           ];
           const dummyChips = () => ['foo', 'bar'];
 
-          const renderTrack = () =>
-            m(TrackWidget, {
-              buttons: Boolean(buttons) ? dummyButtons() : undefined,
-              chips: Boolean(chips) ? dummyChips() : undefined,
-              ...rest,
-            });
+          const renderTrack = (children?: m.Children) =>
+            m(
+              TrackShell,
+              {
+                buttons: Boolean(buttons) ? dummyButtons() : undefined,
+                chips: Boolean(chips) ? dummyChips() : undefined,
+                error: Boolean(error)
+                  ? new Error('An error has occurred')
+                  : undefined,
+                ...rest,
+              },
+              children,
+            );
 
           return m(
             '',
@@ -1371,21 +1461,296 @@ export class WidgetsPage implements m.ClassComponent<PageAttrs> {
         },
         initialOpts: {
           title: 'This is the title of the track',
+          subtitle: 'This is the subtitle of the track',
           buttons: true,
           chips: true,
           heightPx: 32,
-          indentationLevel: 3,
           collapsible: true,
           collapsed: true,
-          isSummary: false,
+          summary: false,
           highlight: false,
           error: false,
           multipleTracks: false,
           reorderable: false,
+          depth: 0,
+          lite: false,
+        },
+      }),
+      m(WidgetShowcase, {
+        label: 'Virtual Overlay Canvas',
+        description: `A scrolling container that draws a virtual canvas over
+          the top of it's content and keeps it in the viewport to make it appear
+          like there is one big canvas over the top of the content.`,
+        renderWidget: () => {
+          const width = 200;
+          const rowCount = 65536;
+          const rowHeight = 20;
+          return m(
+            VirtualOverlayCanvas,
+            {
+              className: 'virtual-canvas',
+              overflowY: 'auto',
+              onCanvasRedraw({ctx, canvasRect}) {
+                ctx.strokeStyle = 'red';
+                ctx.lineWidth = 1;
+
+                ctx.font = '20px Arial';
+                ctx.fillStyle = 'black';
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'top';
+
+                for (let i = 0; i < rowCount; i++) {
+                  const rect = {
+                    left: 0,
+                    top: i * rowHeight,
+                    right: width,
+                    bottom: i * rowHeight + rowHeight,
+                  };
+                  if (canvasRect.overlaps(rect)) {
+                    ctx.strokeRect(0, i * rowHeight, width, rowHeight);
+                    ctx.fillText(`Row: ${i}`, 0, i * rowHeight);
+                  }
+                }
+              },
+            },
+            m('', {
+              style: {height: `${rowCount * rowHeight}px`, width: `${width}px`},
+            }),
+          );
+        },
+        initialOpts: {},
+      }),
+
+      m(WidgetShowcase, {
+        label: 'SplitPanel',
+        description: `Horizontal split panel with draggable handle and controls.`,
+        renderWidget: (opts) => {
+          return m(
+            '',
+            {style: {height: '400px', width: '400px', border: 'solid 2px red'}},
+            m(
+              SplitPanel,
+              {
+                drawerContent: 'Drawer Content',
+                handleContent: Boolean(opts.handleContent) && 'Handle Content',
+              },
+              'Main Content',
+            ),
+          );
+        },
+        initialOpts: {
+          handleContent: false,
+        },
+      }),
+
+      m(WidgetShowcase, {
+        label: 'TabbedSplitPanel',
+        description: `SplitPanel + tabs.`,
+        renderWidget: (opts) => {
+          return m(
+            '',
+            {style: {height: '400px', width: '400px', border: 'solid 2px red'}},
+            m(
+              TabbedSplitPanel,
+              {
+                leftHandleContent:
+                  Boolean(opts.leftContent) &&
+                  m(Button, {icon: 'Menu', compact: true}),
+                tabs: [
+                  {
+                    key: 'foo',
+                    title: 'Foo',
+                    content: 'Foo content',
+                    hasCloseButton: opts.showCloseButtons,
+                  },
+                  {
+                    key: 'bar',
+                    title: 'Bar',
+                    content: 'Bar content',
+                    hasCloseButton: opts.showCloseButtons,
+                  },
+                ],
+              },
+              'Main Content',
+            ),
+          );
+        },
+        initialOpts: {
+          leftContent: true,
+          showCloseButtons: true,
+        },
+      }),
+
+      renderWidgetShowcase({
+        label: 'DataGrid (memory backed)',
+        description: `An interactive data explorer and viewer.`,
+        renderWidget: ({readonlyFilters, readonlySorting, ...rest}) =>
+          m(DataGridShowcase, {
+            ...rest,
+            filters: readonlyFilters ? [] : undefined,
+            sortBy: readonlySorting ? {direction: 'unsorted'} : undefined,
+          }),
+        initialOpts: {
+          showFiltersInToolbar: true,
+          readonlyFilters: false,
+          readonlySorting: false,
+        },
+      }),
+
+      renderWidgetShowcase({
+        label: 'DataGrid (query backed)',
+        description: `An interactive data explorer and viewer - fetched from SQL.`,
+        renderWidget: ({readonlyFilters, readonlySorting, ...rest}) => {
+          const trace = attrs.app.trace;
+          if (trace) {
+            return m(DataGridSqlShowcase, {
+              ...rest,
+              engine: trace.engine,
+              filters: readonlyFilters ? [] : undefined,
+              sortBy: readonlySorting ? {direction: 'unsorted'} : undefined,
+            });
+          } else {
+            return 'Load a trace to start';
+          }
+        },
+        initialOpts: {
+          showFiltersInToolbar: true,
+          readonlyFilters: false,
+          readonlySorting: false,
         },
       }),
     );
   }
+}
+
+function renderWidgetShowcase<T extends Options = {}>(attrs: {
+  label: string;
+  description?: string;
+  renderWidget(opts: T): m.Children;
+  initialOpts?: T;
+  wide?: boolean;
+}) {
+  return m(WidgetShowcase, attrs);
+}
+
+function CursorTooltipShowcase() {
+  let show = false;
+  return {
+    view() {
+      return m(
+        '',
+        {
+          style: {
+            width: '150px',
+            height: '150px',
+            border: '1px dashed gray',
+            userSelect: 'none',
+            color: 'gray',
+            textAlign: 'center',
+            lineHeight: '150px',
+          },
+          onmouseover: () => (show = true),
+          onmouseout: () => (show = false),
+        },
+        'Hover here...',
+        show && m(CursorTooltip, 'Hi!'),
+      );
+    },
+  };
+}
+
+function MultiselectInputDemo() {
+  const options = [
+    'foo',
+    'bar',
+    'baz',
+    'qux',
+    'quux',
+    'corge',
+    'grault',
+    'garply',
+    'waldo',
+    'fred',
+  ];
+  let selectedOptions: string[] = [];
+  return {
+    view() {
+      return m(MultiselectInput, {
+        options: options.map((o) => ({key: o, label: o})),
+        selectedOptions,
+        onOptionAdd: (key) => selectedOptions.push(key),
+        onOptionRemove: (key) => {
+          selectedOptions = selectedOptions.filter((x) => x !== key);
+        },
+      });
+    },
+  };
+}
+
+function DataGridShowcase() {
+  const dataSource = new InMemoryDataSource([
+    {
+      id: 1,
+      name: 'foo',
+      ts: 123n,
+      dur: 16n,
+      data: new Uint8Array(),
+      maybe_null: null,
+    },
+    {
+      id: 2,
+      name: 'bar',
+      ts: 185n,
+      dur: 4n,
+      data: new Uint8Array([1, 2, 3]),
+      maybe_null: 'Non null',
+    },
+    {
+      id: 3,
+      name: 'baz',
+      ts: 575n,
+      dur: 12n,
+      data: new Uint8Array([1, 2, 3]),
+      maybe_null: null,
+    },
+  ]);
+
+  return {
+    view({attrs}: m.Vnode<Partial<DataGridAttrs>>) {
+      return m(DataGrid, {
+        ...attrs,
+        columns: [
+          {name: 'id'},
+          {name: 'ts'},
+          {name: 'dur'},
+          {name: 'name'},
+          {name: 'data'},
+          {name: 'maybe_null'},
+        ],
+        dataSource,
+      });
+    },
+  };
+}
+
+function DataGridSqlShowcase(
+  vnode: m.Vnode<Partial<DataGridAttrs> & {engine: Engine}>,
+) {
+  const dataSource = new SQLDataSource(
+    vnode.attrs.engine,
+    'SELECT * FROM slice',
+  );
+
+  return {
+    view({attrs}: m.Vnode<Partial<DataGridAttrs> & {engine: Engine}>) {
+      return m(DataGrid, {
+        ...attrs,
+        columns: [{name: 'id'}, {name: 'ts'}, {name: 'dur'}],
+        dataSource,
+        maxRowsPerPage: 10,
+      });
+    },
+  };
 }
 
 class ModalShowcase implements m.ClassComponent {
@@ -1408,21 +1773,23 @@ class ModalShowcase implements m.ClassComponent {
     if (staticContent) {
       content = m('.modal-pre', 'Content of the modal dialog.\nEnd of content');
     } else {
-      const component = {
-        oninit: function (vnode: m.Vnode<{}, {progress: number}>) {
-          vnode.state.progress = ((vnode.state.progress as number) || 0) + 1;
-        },
-        view: function (vnode: m.Vnode<{}, {progress: number}>) {
-          vnode.state.progress = (vnode.state.progress + 1) % 100;
-          scheduleFullRedraw();
-          return m(
-            'div',
-            m('div', 'You should see an animating progress bar'),
-            m('progress', {value: vnode.state.progress, max: 100}),
-          );
-        },
-      } as m.Component<{}, {progress: number}>;
-      content = () => m(component);
+      // The humble counter is basically the VDOM 'Hello world'!
+      function CounterComponent() {
+        let counter = 0;
+        return {
+          view: () => {
+            return m(
+              '',
+              `Counter value: ${counter}`,
+              m(Button, {
+                label: 'Increment Counter',
+                onclick: () => ++counter,
+              }),
+            );
+          },
+        };
+      }
+      content = () => m(CounterComponent);
     }
     const closePromise = showModal({
       title: `Modal dialog ${id}`,

@@ -12,11 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import {addDebugSliceTrack} from '../../public/debug_tracks';
 import {Trace} from '../../public/trace';
 import {PerfettoPlugin} from '../../public/plugin';
 import {getTimeSpanOfSelectionOrVisibleWindow} from '../../public/utils';
-import {addQueryResultsTab} from '../../public/lib/query_table/query_result_tab';
+import {addQueryResultsTab} from '../../components/query_table/query_result_tab';
+import {
+  addDebugCounterTrack,
+  addDebugSliceTrack,
+} from '../../components/tracks/debug_tracks';
+import {STR} from '../../trace_processor/query_result';
 
 export default class implements PerfettoPlugin {
   static readonly id = 'dev.perfetto.AndroidPerf';
@@ -214,6 +218,79 @@ export default class implements PerfettoPlugin {
         for (const reason of startReason) {
           await this.addAppProcessStartsDebugTrack(ctx, reason, 'intent');
         }
+      },
+    });
+
+    ctx.commands.registerCommand({
+      id: 'dev.perfetto.AndroidPerf#CounterByFtraceEventArgs',
+      name: 'Add tracks: counter by ftrace event arguments',
+      callback: async (event, value, filter, filterValue) => {
+        if (event === undefined) {
+          const result = await ctx.engine.query(`
+            SELECT DISTINCT name FROM ftrace_event
+          `);
+          const ftraceEvents: string[] = [];
+          const it = result.iter({name: STR});
+          for (; it.valid(); it.next()) {
+            ftraceEvents.push(it.name);
+          }
+          event = await ctx.omnibox.prompt(
+            'Choose a ftrace event...',
+            ftraceEvents,
+          );
+          if (event === undefined) {
+            return;
+          }
+        }
+        if (value === undefined) {
+          const result = await ctx.engine.query(`
+            SELECT DISTINCT
+              key
+            FROM ftrace_event JOIN args USING(arg_set_id)
+            WHERE name = '${event}'
+          `);
+          const args: string[] = [];
+          const it = result.iter({key: STR});
+          for (; it.valid(); it.next()) {
+            args.push(it.key);
+          }
+          value = await ctx.omnibox.prompt(
+            'Choose a argument as counter value...',
+            args,
+          );
+          if (value === undefined) {
+            return;
+          }
+          filter = await ctx.omnibox.prompt(
+            'Choose a argument as pivot key...',
+            args,
+          );
+          if (filter === undefined) {
+            return;
+          }
+        }
+        if (filterValue === undefined) {
+          filterValue = await ctx.omnibox.prompt(
+            'List the target pivot values (separate by comma) to present\n' +
+              'ex1: 123,456 \n' +
+              'ex2: "task_name1","task_name2"\n',
+          );
+          if (filterValue === null) return;
+        }
+        await addDebugCounterTrack({
+          trace: ctx,
+          data: {
+            sqlSource: `
+              SELECT
+                ts,
+                EXTRACT_ARG(arg_set_id, '${value}') AS value,
+                EXTRACT_ARG(arg_set_id, '${filter}') AS pivot
+              FROM ftrace_event
+                WHERE name = '${event}' AND pivot IN (${filterValue})`,
+          },
+          title: event + '#' + value + '@' + filter,
+          pivotOn: 'pivot',
+        });
       },
     });
   }

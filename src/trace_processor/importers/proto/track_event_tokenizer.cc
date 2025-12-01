@@ -73,7 +73,10 @@ TrackEventTokenizer::TrackEventTokenizer(TraceProcessorContext* context,
       counter_name_thread_time_id_(
           context_->storage->InternString("thread_time")),
       counter_name_thread_instruction_count_id_(
-          context_->storage->InternString("thread_instruction_count")) {}
+          context_->storage->InternString("thread_instruction_count")),
+      counter_unit_ids_{{kNullStringId, context_->storage->InternString("ns"),
+                         context_->storage->InternString("count"),
+                         context_->storage->InternString("bytes")}} {}
 
 ModuleResult TrackEventTokenizer::TokenizeRangeOfInterestPacket(
     RefPtr<PacketSequenceStateGeneration> /*state*/,
@@ -85,7 +88,7 @@ ModuleResult TrackEventTokenizer::TokenizeRangeOfInterestPacket(
     context_->storage->IncrementStats(stats::track_event_tokenizer_errors);
     return ModuleResult::Handled();
   }
-  track_event_tracker_->SetRangeOfInterestStartUs(range_of_interest.start_us());
+  track_event_tracker_->set_range_of_interest_us(range_of_interest.start_us());
   context_->metadata_tracker->SetMetadata(
       metadata::range_of_interest_start_us,
       Variadic::Integer(range_of_interest.start_us()));
@@ -227,18 +230,35 @@ ModuleResult TrackEventTokenizer::TokenizeTrackDescriptorPacket(
     }
 
     reservation.is_counter = true;
+    reservation.counter_details =
+        TrackEventTracker::DescriptorTrackReservation::CounterDetails{};
 
-    TrackEventTracker::DescriptorTrackReservation::CounterDetails
-        counter_details;
+    auto& counter_details = *reservation.counter_details;
     counter_details.category = category_id;
     counter_details.is_incremental = counter.is_incremental();
     counter_details.unit_multiplier = counter.unit_multiplier();
 
-    // Incrementally encoded counters are only valid on a single sequence.
-    if (counter.is_incremental())
-      counter_details.packet_sequence_id = packet.trusted_packet_sequence_id();
+    auto unit = static_cast<uint32_t>(counter.unit());
+    if (counter.type() == CounterDescriptor::COUNTER_THREAD_TIME_NS) {
+      counter_details.unit = counter_unit_ids_[CounterDescriptor::UNIT_TIME_NS];
+      counter_details.builtin_type_str = counter_name_thread_time_id_;
+    } else if (counter.type() ==
+               CounterDescriptor::COUNTER_THREAD_INSTRUCTION_COUNT) {
+      counter_details.unit = counter_unit_ids_[CounterDescriptor::UNIT_COUNT];
+      counter_details.builtin_type_str =
+          counter_name_thread_instruction_count_id_;
+    } else if (unit < counter_unit_ids_.size() &&
+               unit != CounterDescriptor::COUNTER_UNSPECIFIED) {
+      counter_details.unit = counter_unit_ids_[unit];
+    } else {
+      counter_details.unit =
+          context_->storage->InternString(counter.unit_name());
+    }
 
-    reservation.counter_details = std::move(counter_details);
+    // Incrementally encoded counters are only valid on a single sequence.
+    if (counter.is_incremental()) {
+      counter_details.packet_sequence_id = packet.trusted_packet_sequence_id();
+    }
     track_event_tracker_->ReserveDescriptorTrack(track.uuid(), reservation);
 
     return ModuleResult::Ignored();
@@ -344,8 +364,12 @@ ModuleResult TrackEventTokenizer::TokenizeTrackEventPacket(
   if (PERFETTO_UNLIKELY(event.has_legacy_event())) {
     protos::pbzero::TrackEvent::LegacyEvent::Decoder leg(event.legacy_event());
     if (PERFETTO_UNLIKELY(leg.phase() == 'P')) {
-      RETURN_IF_ERROR(TokenizeLegacySampleEvent(
-          event, leg, *data.trace_packet_data.sequence_state));
+      base::Status status = TokenizeLegacySampleEvent(
+          event, leg, *data.trace_packet_data.sequence_state);
+      if (!status.ok()) {
+        context_->storage->IncrementStats(
+            stats::legacy_v8_cpu_profile_invalid_sample);
+      }
     }
   }
 
@@ -543,7 +567,7 @@ base::Status TrackEventTokenizer::TokenizeLegacySampleEvent(
       base::Status status =
           context_->legacy_v8_cpu_profile_tracker->AddCallsite(
               legacy.unscoped_id(), static_cast<uint32_t>(state.pid()), node_id,
-              parent_node_id, url, function_name);
+              parent_node_id, url, function_name, {});
       if (!status.ok()) {
         context_->storage->IncrementStats(
             stats::legacy_v8_cpu_profile_invalid_callsite);

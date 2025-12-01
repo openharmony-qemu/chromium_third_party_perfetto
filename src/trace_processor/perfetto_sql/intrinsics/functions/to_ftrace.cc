@@ -57,6 +57,7 @@
 #include "protos/perfetto/trace/ftrace/power.pbzero.h"
 #include "protos/perfetto/trace/ftrace/samsung.pbzero.h"
 #include "protos/perfetto/trace/ftrace/sched.pbzero.h"
+#include "protos/perfetto/trace/ftrace/timer.pbzero.h"
 #include "protos/perfetto/trace/ftrace/workqueue.pbzero.h"
 #include "src/trace_processor/types/version_number.h"
 
@@ -375,7 +376,7 @@ void ArgsSerializer::SerializeArgs() {
   } else if (event_name_ == "sched_blocked_reason") {
     using SBR = protos::pbzero::SchedBlockedReasonFtraceEvent;
     WriteArgForField(SBR::kPidFieldNumber, DVW());
-    WriteArgForField(SBR::kIoWaitFieldNumber, DVW());
+    WriteArgForField(SBR::kIoWaitFieldNumber, "iowait", DVW());
     WriteArgForField(SBR::kCallerFieldNumber,
                      Wrap(&ArgsSerializer::WriteKernelFnValue));
     return;
@@ -531,6 +532,11 @@ void ArgsSerializer::SerializeArgs() {
     WriteArgForField(CAT::kPidFieldNumber, DVW());
     WriteArgForField(CAT::kCommFieldNumber, DVW());
     return;
+  } else if (event_name_ == "hrtimer_expire_entry") {
+    using HEE = protos::pbzero::HrtimerExpireEntryFtraceEvent;
+    WriteArgForField(HEE::kFunctionFieldNumber,
+                     Wrap(&ArgsSerializer::WriteKernelFnValue));
+    return;
   }
   for (; it_; ++it_) {
     WriteArgAtRow(it_.row_number().row_number(), DVW());
@@ -615,7 +621,7 @@ SystraceSerializer::SystraceSerializer(TraceProcessorContext* context)
 
 SystraceSerializer::ScopedCString SystraceSerializer::SerializeToString(
     uint32_t raw_row) {
-  const auto& raw = storage_->raw_table();
+  const auto& raw = storage_->ftrace_event_table();
 
   char line[4096];
   base::StringWriter writer(line, sizeof(line));
@@ -648,7 +654,7 @@ SystraceSerializer::ScopedCString SystraceSerializer::SerializeToString(
 
 void SystraceSerializer::SerializePrefix(uint32_t raw_row,
                                          base::StringWriter* writer) {
-  const auto& raw = storage_->raw_table();
+  const auto& raw = storage_->ftrace_event_table();
   const auto& cpu_table = storage_->cpu_table();
 
   int64_t ts = raw.ts()[raw_row];

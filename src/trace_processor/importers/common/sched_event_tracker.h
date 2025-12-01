@@ -19,7 +19,6 @@
 
 #include <cstdint>
 
-#include "perfetto/base/logging.h"
 #include "perfetto/public/compiler.h"
 #include "src/trace_processor/importers/common/cpu_tracker.h"
 #include "src/trace_processor/importers/common/event_tracker.h"
@@ -57,28 +56,29 @@ class SchedEventTracker : public Destructible {
   }
 
   PERFETTO_ALWAYS_INLINE
-  bool UpdateEventTrackerTimestamp(int64_t ts,
-                                   const char* event_name,
-                                   size_t stats) {
-    // Post sorter stage, all events should be globally timestamp ordered.
-    int64_t max_ts = context_->event_tracker->max_timestamp();
-    if (ts < max_ts) {
-      PERFETTO_ELOG("%s event out of order by %.4f ms, skipping", event_name,
-                    static_cast<double>(max_ts - ts) / 1e6);
-      context_->storage->IncrementStats(stats);
-      return false;
-    }
-    context_->event_tracker->UpdateMaxTimestamp(ts);
-    return true;
-  }
-
-  PERFETTO_ALWAYS_INLINE
   void ClosePendingSlice(uint32_t pending_slice_idx,
                          int64_t ts,
                          StringId prev_state) {
     auto* slices = context_->storage->mutable_sched_slice_table();
     auto r = (*slices)[pending_slice_idx];
     r.set_dur(ts - r.ts());
+    r.set_end_state(prev_state);
+  }
+
+  PERFETTO_ALWAYS_INLINE
+  int64_t GetEndTimestampForPendingSlice(uint32_t pending_slice_idx) {
+    auto* slices = context_->storage->mutable_sched_slice_table();
+    auto r = (*slices)[pending_slice_idx];
+    if (r.dur() < 0)
+      return -1;
+    return r.ts() + r.dur();
+  }
+
+  PERFETTO_ALWAYS_INLINE
+  void SetEndStateForPendingSlice(uint32_t pending_slice_idx,
+                                  StringId prev_state) {
+    auto* slices = context_->storage->mutable_sched_slice_table();
+    auto r = (*slices)[pending_slice_idx];
     r.set_end_state(prev_state);
   }
 

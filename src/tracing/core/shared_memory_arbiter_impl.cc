@@ -102,6 +102,22 @@ Chunk SharedMemoryArbiterImpl::GetNewChunk(
   static const int kFlushCommitsAfterEveryNStalls = 2;
   static const int kAssertAtNStalls = 200;
 
+  bool should_stall = false;
+  bool should_abort = false;
+
+  switch (buffer_exhausted_policy) {
+    case BufferExhaustedPolicy::kDrop:
+      break;
+    case BufferExhaustedPolicy::kStall:
+      should_stall = true;
+      should_abort = true;
+      break;
+    case BufferExhaustedPolicy::kStallThenDrop:
+      should_stall = true;
+      should_abort = false;
+      break;
+  }
+
   for (;;) {
     // TODO(primiano): Probably this lock is not really required and this code
     // could be rewritten leveraging only the Try* atomic operations in
@@ -114,8 +130,7 @@ Chunk SharedMemoryArbiterImpl::GetNewChunk(
       // buffer reservations were bound, but to avoid raciness between the
       // creation of startup writers and binding, we categorically forbid kStall
       // mode.
-      PERFETTO_DCHECK(was_always_bound_ ||
-                      buffer_exhausted_policy == BufferExhaustedPolicy::kDrop);
+      PERFETTO_DCHECK(was_always_bound_ || !should_stall);
 
       task_runner_runs_on_current_thread =
           task_runner_ && task_runner_->RunsTasksOnCurrentThread();
@@ -131,8 +146,7 @@ Chunk SharedMemoryArbiterImpl::GetNewChunk(
       // synchronously on another thread will lead to subtle bugs caused by
       // out-of-order commit requests (crbug.com/919187#c28).
       bool should_commit_synchronously =
-          task_runner_runs_on_current_thread &&
-          buffer_exhausted_policy == BufferExhaustedPolicy::kStall &&
+          task_runner_runs_on_current_thread && should_stall &&
           commit_data_req_ && bytes_pending_commit_ >= shmem_abi_.size() / 2;
 
       const size_t initial_page_idx = page_idx_;
@@ -144,7 +158,6 @@ Chunk SharedMemoryArbiterImpl::GetNewChunk(
         auto layout = SharedMemoryArbiterImpl::default_page_layout;
 
         if (shmem_abi_.is_page_free(page_idx_)) {
-          // TODO(primiano): Use the |size_hint| here to decide the layout.
           is_new_page = shmem_abi_.TryPartitionPage(page_idx_, layout);
         }
         uint32_t free_chunks;
@@ -164,8 +177,8 @@ Chunk SharedMemoryArbiterImpl::GetNewChunk(
           if (!chunk.is_valid())
             continue;
           if (stall_count > kLogAfterNStalls) {
-            PERFETTO_LOG("Recovered from stall after %d iterations",
-                         stall_count);
+            PERFETTO_DLOG("Recovered from stall after %d iterations",
+                          stall_count);
           }
 
           if (should_commit_synchronously) {
@@ -180,7 +193,7 @@ Chunk SharedMemoryArbiterImpl::GetNewChunk(
       }
     }  // scoped_lock
 
-    if (buffer_exhausted_policy == BufferExhaustedPolicy::kDrop) {
+    if (!should_stall) {
       PERFETTO_DLOG("Shared memory buffer exhausted, returning invalid Chunk!");
       return Chunk();
     }
@@ -191,12 +204,23 @@ Chunk SharedMemoryArbiterImpl::GetNewChunk(
     // All chunks are taken (either kBeingWritten by us or kBeingRead by the
     // Service).
     if (stall_count++ == kLogAfterNStalls) {
-      PERFETTO_LOG("Shared memory buffer overrun! Stalling");
+      PERFETTO_DLOG("Shared memory buffer overrun! Stalling");
     }
 
     if (stall_count == kAssertAtNStalls) {
-      PERFETTO_FATAL(
-          "Shared memory buffer max stall count exceeded; possible deadlock");
+      if (should_abort) {
+        Stats stats = GetStats();
+        PERFETTO_FATAL(
+            "Shared memory buffer max stall count exceeded; possible deadlock "
+            "free=%zu bw=%zu br=%zu comp=%zu pages_free=%zu pages_err=%zu",
+            stats.chunks_free, stats.chunks_being_written,
+            stats.chunks_being_read, stats.chunks_complete, stats.pages_free,
+            stats.pages_unexpected);
+      } else {
+        PERFETTO_DLOG(
+            "Shared memory buffer exhausted, returning invalid Chunk!");
+        return Chunk();
+      }
     }
 
     // If the IPC thread itself is stalled because the current process has
@@ -256,7 +280,7 @@ void SharedMemoryArbiterImpl::UpdateCommitDataRequest(
   uint32_t flush_delay_ms = 0;
   base::WeakPtr<SharedMemoryArbiterImpl> weak_this;
   {
-    std::lock_guard<std::mutex> scoped_lock(lock_);
+    std::unique_lock<std::mutex> scoped_lock(lock_);
 
     if (!commit_data_req_) {
       commit_data_req_.reset(new CommitDataRequest());
@@ -365,6 +389,29 @@ void SharedMemoryArbiterImpl::UpdateCommitDataRequest(
       task_runner_to_post_delayed_callback_on = task_runner_;
       flush_delay_ms = 0;
     }
+
+    // When using shmem emulation we commit the completed chunks immediately
+    // to prevent the |bytes_pending_commit_| to become greater than the size
+    // of the IPC buffer, since the chunk's data must be passed in the commit
+    // data request proto through the network socket. Not doing so could
+    // result in a "IPC Frame too large" issue on the host traced side.
+    if (fully_bound_ && use_shmem_emulation_) {
+      if (task_runner_->RunsTasksOnCurrentThread()) {
+        task_runner_to_post_delayed_callback_on = nullptr;
+        // Allow next call to UpdateCommitDataRequest to start
+        // another batching period.
+        delayed_flush_scheduled_ = false;
+        // We can't flush while holding the lock
+        scoped_lock.unlock();
+        FlushPendingCommitDataRequests();
+      } else {
+        // Since we aren't on the |task_runner_| thread post a task instead,
+        // in order to prevent non-overlaping commit data request flushes.
+        weak_this = weak_ptr_factory_.GetWeakPtr();
+        task_runner_to_post_delayed_callback_on = task_runner_;
+        flush_delay_ms = 0;
+      }
+    }
   }  // scoped_lock(lock_)
 
   // We shouldn't post tasks while locked.
@@ -402,9 +449,9 @@ bool SharedMemoryArbiterImpl::TryDirectPatchLocked(
   auto& chunks_to_move = commit_data_req_->chunks_to_move();
   for (auto ctm_it = chunks_to_move.rbegin(); ctm_it != chunks_to_move.rend();
        ++ctm_it) {
-    uint32_t layout = shmem_abi_.GetPageLayout(ctm_it->page());
-    auto chunk_state =
-        shmem_abi_.GetChunkStateFromLayout(layout, ctm_it->chunk());
+    uint32_t header_bitmap = shmem_abi_.GetPageHeaderBitmap(ctm_it->page());
+    auto chunk_state = shmem_abi_.GetChunkStateFromHeaderBitmap(
+        header_bitmap, ctm_it->chunk());
     // Note: the subset of |commit_data_req_| chunks that still need patching is
     // also the subset of chunks that are still being written to. The rest of
     // the chunks in |commit_data_req_| do not need patching and have already
@@ -412,8 +459,8 @@ bool SharedMemoryArbiterImpl::TryDirectPatchLocked(
     if (chunk_state != SharedMemoryABI::kChunkBeingWritten)
       continue;
 
-    chunk =
-        shmem_abi_.GetChunkUnchecked(ctm_it->page(), layout, ctm_it->chunk());
+    chunk = shmem_abi_.GetChunkUnchecked(ctm_it->page(), header_bitmap,
+                                         ctm_it->chunk());
     if (chunk.writer_id() == writer_id &&
         chunk.header()->chunk_id.load(std::memory_order_relaxed) ==
             patch.chunk_id) {
@@ -533,16 +580,16 @@ void SharedMemoryArbiterImpl::FlushPendingCommitDataRequests(
       // not be possible to apply any more patches to them and we need to move
       // them to kChunkComplete - otherwise the service won't look at them.
       for (auto& ctm : *commit_data_req_->mutable_chunks_to_move()) {
-        uint32_t layout = shmem_abi_.GetPageLayout(ctm.page());
-        auto chunk_state =
-            shmem_abi_.GetChunkStateFromLayout(layout, ctm.chunk());
+        uint32_t header_bitmap = shmem_abi_.GetPageHeaderBitmap(ctm.page());
+        auto chunk_state = shmem_abi_.GetChunkStateFromHeaderBitmap(
+            header_bitmap, ctm.chunk());
         // Note: the subset of |commit_data_req_| chunks that still need
         // patching is also the subset of chunks that are still being written
         // to. The rest of the chunks in |commit_data_req_| do not need patching
         // and have already been marked as complete.
         if (chunk_state == SharedMemoryABI::kChunkBeingWritten) {
-          auto chunk =
-              shmem_abi_.GetChunkUnchecked(ctm.page(), layout, ctm.chunk());
+          auto chunk = shmem_abi_.GetChunkUnchecked(ctm.page(), header_bitmap,
+                                                    ctm.chunk());
           shmem_abi_.ReleaseChunkAsComplete(std::move(chunk));
         }
 
@@ -551,8 +598,8 @@ void SharedMemoryArbiterImpl::FlushPendingCommitDataRequests(
           // 1. serialize the chunk data to |ctm| as we won't modify the chunk
           // anymore.
           // 2. free the chunk as the service won't be able to do this.
-          auto chunk =
-              shmem_abi_.GetChunkUnchecked(ctm.page(), layout, ctm.chunk());
+          auto chunk = shmem_abi_.GetChunkUnchecked(ctm.page(), header_bitmap,
+                                                    ctm.chunk());
           PERFETTO_CHECK(chunk.is_valid());
           ctm.set_data(chunk.begin(), chunk.size());
           shmem_abi_.ReleaseChunkAsFree(std::move(chunk));
@@ -744,6 +791,45 @@ void SharedMemoryArbiterImpl::BindStartupTargetBufferImpl(
   // |fully_bound_| again.
   if (should_flush)
     FlushPendingCommitDataRequests(flush_callback);
+}
+
+SharedMemoryArbiterImpl::Stats SharedMemoryArbiterImpl::GetStats() {
+  std::lock_guard<std::mutex> scoped_lock(lock_);
+  Stats res;
+
+  for (size_t page_idx = 0; page_idx < shmem_abi_.num_pages(); page_idx++) {
+    uint32_t bitmap = shmem_abi_.page_header(page_idx)->header_bitmap.load(
+        std::memory_order_relaxed);
+    SharedMemoryABI::PageLayout layout =
+        SharedMemoryABI::GetLayoutFromHeaderBitmap(bitmap);
+    if (layout == SharedMemoryABI::kPageNotPartitioned) {
+      res.pages_free++;
+    } else if (layout == SharedMemoryABI::kPageDivReserved1 ||
+               layout == SharedMemoryABI::kPageDivReserved2) {
+      res.pages_unexpected++;
+    }
+    // Free and unexpected pages have zero chunks.
+    const uint32_t num_chunks =
+        SharedMemoryABI::GetNumChunksFromHeaderBitmap(bitmap);
+    for (uint32_t i = 0; i < num_chunks; i++) {
+      switch (SharedMemoryABI::GetChunkStateFromHeaderBitmap(bitmap, i)) {
+        case SharedMemoryABI::kChunkFree:
+          res.chunks_free++;
+          break;
+        case SharedMemoryABI::kChunkBeingWritten:
+          res.chunks_being_written++;
+          break;
+        case SharedMemoryABI::kChunkBeingRead:
+          res.chunks_being_read++;
+          break;
+        case SharedMemoryABI::kChunkComplete:
+          res.chunks_complete++;
+          break;
+      }
+    }
+  }
+
+  return res;
 }
 
 std::function<void()>

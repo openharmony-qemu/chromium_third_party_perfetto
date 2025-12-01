@@ -15,14 +15,16 @@
 import m from 'mithril';
 import {SimpleResizeObserver} from '../../base/resize_observer';
 import {undoCommonChatAppReplacements} from '../../base/string_utils';
-import {QueryResponse, runQuery} from '../../public/lib/query_table/queries';
+import {
+  QueryResponse,
+  runQueryForQueryTable,
+} from '../../components/query_table/queries';
 import {Callout} from '../../widgets/callout';
 import {Editor} from '../../widgets/editor';
-import {PageWithTraceAttrs} from '../../public/page';
 import {QueryHistoryComponent, queryHistoryStorage} from './query_history';
 import {Trace, TraceAttrs} from '../../public/trace';
-import {addQueryResultsTab} from '../../public/lib/query_table/query_result_tab';
-import {QueryTable} from '../../public/lib/query_table/query_table';
+import {addQueryResultsTab} from '../../components/query_table/query_result_tab';
+import {QueryTable} from '../../components/query_table/query_table';
 
 interface QueryPageState {
   enteredText: string;
@@ -41,26 +43,26 @@ const state: QueryPageState = {
 function runManualQuery(trace: Trace, query: string) {
   state.executedQuery = query;
   state.queryResult = undefined;
-  runQuery(undoCommonChatAppReplacements(query), trace.engine).then(
-    (resp: QueryResponse) => {
-      addQueryResultsTab(
-        trace,
-        {
-          query: query,
-          title: 'Standalone Query',
-          prefetchedResponse: resp,
-        },
-        'analyze_page_query',
-      );
-      // We might have started to execute another query. Ignore it in that
-      // case.
-      if (state.executedQuery !== query) {
-        return;
-      }
-      state.queryResult = resp;
-      trace.scheduleFullRedraw();
-    },
-  );
+  runQueryForQueryTable(
+    undoCommonChatAppReplacements(query),
+    trace.engine,
+  ).then((resp: QueryResponse) => {
+    addQueryResultsTab(
+      trace,
+      {
+        query: query,
+        title: 'Standalone Query',
+        prefetchedResponse: resp,
+      },
+      'analyze_page_query',
+    );
+    // We might have started to execute another query. Ignore it in that
+    // case.
+    if (state.executedQuery !== query) {
+      return;
+    }
+    state.queryResult = resp;
+  });
 }
 
 export type QueryInputAttrs = TraceAttrs;
@@ -84,6 +86,7 @@ class QueryInput implements m.ClassComponent<QueryInputAttrs> {
 
   view({attrs}: m.CVnode<QueryInputAttrs>) {
     return m(Editor, {
+      language: 'perfetto-sql',
       generation: state.generation,
       initialText: state.enteredText,
 
@@ -97,14 +100,17 @@ class QueryInput implements m.ClassComponent<QueryInputAttrs> {
 
       onUpdate: (text: string) => {
         state.enteredText = text;
-        attrs.trace.scheduleFullRedraw();
       },
     });
   }
 }
 
-export class QueryPage implements m.ClassComponent<PageWithTraceAttrs> {
-  view({attrs}: m.CVnode<PageWithTraceAttrs>) {
+export interface QueryPageAttrs {
+  readonly trace: Trace;
+}
+
+export class QueryPage implements m.ClassComponent<QueryPageAttrs> {
+  view({attrs}: m.CVnode<QueryPageAttrs>) {
     return m(
       '.query-page',
       m(Callout, 'Enter query and press Cmd/Ctrl + Enter'),
@@ -131,7 +137,6 @@ export class QueryPage implements m.ClassComponent<PageWithTraceAttrs> {
         setQuery: (q: string) => {
           state.enteredText = q;
           state.generation++;
-          attrs.trace.scheduleFullRedraw();
         },
       }),
     );

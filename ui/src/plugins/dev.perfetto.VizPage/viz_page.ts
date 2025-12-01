@@ -14,31 +14,34 @@
 
 import m from 'mithril';
 import {Editor} from '../../widgets/editor';
-import {VegaView} from '../../widgets/vega_view';
-import {PageWithTraceAttrs} from '../../public/page';
+import {VegaView} from '../../components/widgets/vega_view';
 import {Engine} from '../../trace_processor/engine';
+import {Trace} from '../../public/trace';
 
-let SPEC = '';
+export interface VizPageAttrs {
+  readonly trace: Trace;
+  readonly spec: string;
+  readonly setSpec: (spec: string) => void;
+}
 
-export class VizPage implements m.ClassComponent<PageWithTraceAttrs> {
+export class VizPage implements m.ClassComponent<VizPageAttrs> {
   private engine: Engine;
 
-  constructor({attrs}: m.CVnode<PageWithTraceAttrs>) {
+  constructor({attrs}: m.CVnode<VizPageAttrs>) {
     this.engine = attrs.trace.engine.getProxy('VizPage');
   }
-
-  view({attrs}: m.CVnode<PageWithTraceAttrs>) {
+  view({attrs}: m.CVnode<VizPageAttrs>) {
     return m(
-      '.viz-page',
+      '.page.viz-page',
       m(VegaView, {
-        spec: SPEC,
+        spec: attrs.spec,
         engine: this.engine,
         data: {},
       }),
       m(Editor, {
+        initialText: attrs.spec,
         onUpdate: (text: string) => {
-          SPEC = text;
-          attrs.trace.scheduleFullRedraw();
+          attrs.setSpec(text);
         },
       }),
     );

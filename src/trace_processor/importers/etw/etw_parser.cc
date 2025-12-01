@@ -15,16 +15,24 @@
  */
 
 #include "src/trace_processor/importers/etw/etw_parser.h"
+#include <cstdint>
+#include <limits>
 
+#include "perfetto/base/status.h"
 #include "perfetto/ext/base/string_view.h"
+#include "perfetto/protozero/field.h"
+#include "perfetto/trace_processor/status.h"
+#include "perfetto/trace_processor/trace_blob_view.h"
 #include "src/trace_processor/importers/common/parser_types.h"
 #include "src/trace_processor/importers/common/process_tracker.h"
 #include "src/trace_processor/importers/common/sched_event_tracker.h"
 #include "src/trace_processor/importers/common/thread_state_tracker.h"
+#include "src/trace_processor/storage/stats.h"
 #include "src/trace_processor/storage/trace_storage.h"
 
 #include "protos/perfetto/trace/etw/etw.pbzero.h"
 #include "protos/perfetto/trace/etw/etw_event.pbzero.h"
+#include "src/trace_processor/types/trace_processor_context.h"
 
 namespace perfetto {
 namespace trace_processor {
@@ -36,7 +44,7 @@ using protozero::ConstBytes;
 }  // namespace
 EtwParser::EtwParser(TraceProcessorContext* context) : context_(context) {}
 
-util::Status EtwParser::ParseEtwEvent(uint32_t cpu,
+base::Status EtwParser::ParseEtwEvent(uint32_t cpu,
                                       int64_t ts,
                                       const TracePacketData& data) {
   using protos::pbzero::EtwTraceEvent;
@@ -51,17 +59,26 @@ util::Status EtwParser::ParseEtwEvent(uint32_t cpu,
     ParseReadyThread(ts, decoder.ready_thread());
   }
 
-  return util::OkStatus();
+  return base::OkStatus();
 }
 
 void EtwParser::ParseCswitch(int64_t timestamp, uint32_t cpu, ConstBytes blob) {
-  protos::pbzero::CSwitchEtwEvent::Decoder cs(blob.data, blob.size);
-  PushSchedSwitch(cpu, timestamp, cs.old_thread_id(), cs.old_thread_state(),
-                  cs.new_thread_id(), cs.new_thread_priority());
+  protos::pbzero::CSwitchEtwEvent::Decoder cs(blob);
+  int32_t old_thread_state = cs.has_old_thread_state()
+                                 ? cs.old_thread_state()
+                                 : cs.old_thread_state_int();
+  // thread_id might be erased for privacy/security concerns, in this case, use
+  // a dummy id since 0 means idle.
+  uint32_t old_thread_id =
+      cs.has_old_thread_id() ? cs.old_thread_id() : uint32_t(-1);
+  uint32_t new_thread_id =
+      cs.has_new_thread_id() ? cs.new_thread_id() : uint32_t(-1);
+  PushSchedSwitch(cpu, timestamp, old_thread_id, old_thread_state,
+                  new_thread_id, cs.new_thread_priority());
 }
 
 void EtwParser::ParseReadyThread(int64_t timestamp, ConstBytes blob) {
-  protos::pbzero::ReadyThreadEtwEvent::Decoder rt(blob.data, blob.size);
+  protos::pbzero::ReadyThreadEtwEvent::Decoder rt(blob);
   UniqueTid utid =
       context_->process_tracker->GetOrCreateThread(rt.t_thread_id());
   ThreadStateTracker::GetOrCreate(context_)->PushWakingEvent(timestamp, utid,
@@ -71,15 +88,9 @@ void EtwParser::ParseReadyThread(int64_t timestamp, ConstBytes blob) {
 void EtwParser::PushSchedSwitch(uint32_t cpu,
                                 int64_t ts,
                                 uint32_t prev_tid,
-                                int64_t prev_state,
+                                int32_t prev_state,
                                 uint32_t next_tid,
                                 int32_t next_prio) {
-  // At this stage all events should be globally timestamp ordered.
-  if (!context_->sched_event_tracker->UpdateEventTrackerTimestamp(
-          ts, "etw_cswitch", stats::sched_switch_out_of_order)) {
-    return;
-  }
-
   UniqueTid next_utid = context_->process_tracker->GetOrCreateThread(next_tid);
 
   // First use this data to close the previous slice.

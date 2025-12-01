@@ -12,15 +12,62 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import z from 'zod';
 import {OmniboxMode} from '../../core/omnibox_manager';
 import {Trace} from '../../public/trace';
 import {PerfettoPlugin} from '../../public/plugin';
 import {AppImpl} from '../../core/app_impl';
 import {getTimeSpanOfSelectionOrVisibleWindow} from '../../public/utils';
-import {exists} from '../../base/utils';
+import {exists, RequiredField} from '../../base/utils';
+import {LONG, NUM, NUM_NULL} from '../../trace_processor/query_result';
+import {TrackNode} from '../../public/workspace';
+import {App} from '../../public/app';
+import {Setting} from '../../public/settings';
 
-export default class implements PerfettoPlugin {
+export default class TrackUtilsPlugin implements PerfettoPlugin {
   static readonly id = 'perfetto.TrackUtils';
+  static dvorakSetting: Setting<boolean>;
+
+  static onActivate(app: App): void {
+    TrackUtilsPlugin.dvorakSetting = app.settings.register({
+      // Plugin ID is omitted because we might want to move this setting in the
+      // future.
+      id: 'dvorakMode',
+      defaultValue: false,
+      name: 'Dvorak mode',
+      description: 'Rearranges hotkeys to avoid collisions in Dvorak layout.',
+      schema: z.boolean(),
+      requiresReload: true, // Hotkeys are registered on trace load.
+    });
+
+    // Register this command up front to block the print dialog from appearing
+    // when pressing the hotkey before the trace is loaded.
+    app.commands.registerCommand({
+      id: 'perfetto.FindTrackByName',
+      name: 'Find track by name',
+      callback: async () => {
+        const trace = app.trace;
+        if (!trace) {
+          return;
+        }
+
+        const tracksWithUris = trace.workspace.flatTracksOrdered.filter(
+          (track) => track.uri !== undefined,
+        ) as ReadonlyArray<RequiredField<TrackNode, 'uri'>>;
+        const track = await app.omnibox.prompt('Choose a track...', {
+          values: tracksWithUris,
+          getName: (track) => track.fullPath.join(' \u2023 '),
+        });
+        track &&
+          trace.selection.selectTrack(track.uri, {
+            scrollToSelection: true,
+          });
+      },
+      // This is analogous to the 'Find file' hotkey in VSCode.
+      defaultHotkey: '!Mod+P',
+    });
+  }
+
   async onTraceLoad(ctx: Trace): Promise<void> {
     ctx.commands.registerCommand({
       id: 'perfetto.RunQueryInSelectedTimeWindow',
@@ -37,51 +84,89 @@ export default class implements PerfettoPlugin {
     });
 
     ctx.commands.registerCommand({
-      id: 'perfetto.FindTrackByName',
-      name: 'Find track by name',
-      callback: async () => {
-        const options = ctx.workspace.flatTracks
-          .map((node) => {
-            return exists(node.uri)
-              ? {key: node.uri, displayName: node.fullPath.join(' \u2023 ')}
-              : undefined;
-          })
-          .filter((pair) => pair !== undefined);
-        const uri = await ctx.omnibox.prompt('Choose a track...', options);
-        uri && ctx.selection.selectTrack(uri, {scrollToSelection: true});
-      },
-    });
-
-    ctx.commands.registerCommand({
       id: 'perfetto.FindTrackByUri',
       name: 'Find track by URI',
       callback: async () => {
-        const options = ctx.workspace.flatTracks
-          .map((track) => track.uri)
-          .filter((uri) => uri !== undefined)
-          .map((uri) => {
-            return {key: uri, displayName: uri};
+        const tracksWithUris = ctx.workspace.flatTracksOrdered.filter(
+          (track) => track.uri !== undefined,
+        ) as ReadonlyArray<RequiredField<TrackNode, 'uri'>>;
+        const track = await ctx.omnibox.prompt('Choose a track...', {
+          values: tracksWithUris,
+          getName: (track) => track.uri,
+        });
+        track &&
+          ctx.selection.selectTrack(track.uri, {
+            scrollToSelection: true,
           });
-
-        const uri = await ctx.omnibox.prompt('Choose a track...', options);
-        uri && ctx.selection.selectTrack(uri, {scrollToSelection: true});
       },
     });
 
     ctx.commands.registerCommand({
       id: 'perfetto.PinTrackByName',
       name: 'Pin track by name',
+      defaultHotkey: 'Shift+T',
       callback: async () => {
-        const options = ctx.workspace.flatTracks
-          .map((node) => {
-            return exists(node.uri)
-              ? {key: node.id, displayName: node.fullPath.join(' \u2023 ')}
-              : undefined;
-          })
-          .filter((option) => option !== undefined);
-        const id = await ctx.omnibox.prompt('Choose a track...', options);
-        id && ctx.workspace.getTrackById(id)?.pin();
+        const tracksWithUris = ctx.workspace.flatTracksOrdered.filter(
+          (track) => track.uri !== undefined,
+        ) as ReadonlyArray<RequiredField<TrackNode, 'uri'>>;
+        const track = await ctx.omnibox.prompt('Choose a track...', {
+          values: tracksWithUris,
+          getName: (track) => track.title,
+        });
+        track && track.pin();
+      },
+    });
+
+    ctx.commands.registerCommand({
+      id: 'perfetto.SelectNextTrackEvent',
+      name: 'Select next track event',
+      defaultHotkey: '.',
+      callback: async () => {
+        await selectAdjacentTrackEvent(ctx, 'next');
+      },
+    });
+
+    ctx.commands.registerCommand({
+      id: 'perfetto.SelectPreviousTrackEvent',
+      name: 'Select previous track event',
+      defaultHotkey: !TrackUtilsPlugin.dvorakSetting.get() ? ',' : undefined,
+      callback: async () => {
+        await selectAdjacentTrackEvent(ctx, 'prev');
       },
     });
   }
+}
+
+/**
+ * If a track event is currently selected, select the next or previous event on
+ * that same track chronologically ordered by `ts`.
+ */
+async function selectAdjacentTrackEvent(
+  ctx: Trace,
+  direction: 'next' | 'prev',
+) {
+  const selection = ctx.selection.selection;
+  if (selection.kind !== 'track_event') return;
+
+  const td = ctx.tracks.getTrack(selection.trackUri);
+  const dataset = td?.track.getDataset?.();
+  if (!dataset || !dataset.implements({id: NUM, ts: LONG})) return;
+
+  const windowFunc = direction === 'next' ? 'LEAD' : 'LAG';
+  const result = await ctx.engine.query(`
+      WITH
+        CTE AS (
+          SELECT
+            id,
+            ${windowFunc}(id) OVER (ORDER BY ts) AS resultId
+          FROM (${dataset.query()})
+        )
+      SELECT * FROM CTE WHERE id = ${selection.eventId}
+    `);
+  const resultId = result.maybeFirstRow({resultId: NUM_NULL})?.resultId;
+  if (!exists(resultId)) return;
+
+  ctx.selection.selectTrackEvent(selection.trackUri, resultId, {
+    scrollToSelection: true,
+  });
 }
