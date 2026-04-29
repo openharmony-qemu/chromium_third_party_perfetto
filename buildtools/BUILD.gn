@@ -621,6 +621,7 @@ if (current_toolchain == host_toolchain) {
       # Protobuf does has its own #define WIN32_LEAN_AND_MEAN.
       configs -= [ "//gn/standalone:win32_lean_and_mean" ]
     }
+    ldflags = [ "-lgcc_s" ]
   }
 }  # host_toolchain
 
