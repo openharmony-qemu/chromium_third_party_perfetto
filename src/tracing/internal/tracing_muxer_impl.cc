@@ -22,6 +22,7 @@
 #include <optional>
 #include <vector>
 
+#include "arkweb/build/features/features.h"
 #include "perfetto/base/build_config.h"
 #include "perfetto/base/logging.h"
 #include "perfetto/base/task_runner.h"
@@ -1189,6 +1190,9 @@ void TracingMuxerImpl::RegisterInterceptor(
     }
     // Only allow certain interceptors for now.
     if (descriptor.name() != "test_interceptor" &&
+#if BUILDFLAG(IS_ARKWEB) || BUILDFLAG(ARKWEB_DFX_TRACING)
+        descriptor.name() != "hitrace_interceptor" &&
+#endif
         descriptor.name() != "console" && descriptor.name() != "etwexport") {
       PERFETTO_ELOG(
           "Interceptors are experimental. If you want to use them, please "
